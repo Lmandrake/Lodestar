@@ -1,0 +1,32 @@
+# Lodestar multi-machine sync sweep — the Linux/WSL counterpart of com.lodestar.sync.plist.
+# Installed as a SYSTEM unit by bin/install_sync_agent_linux.sh (run as root, e.g. through
+# `wsl.exe -u root`, so no sudo prompt), running as the owning user.
+#
+# Load-bearing notes:
+# - Type=oneshot, fired by lodestar-sync.timer. One sweep, then exit.
+# - MemoryMax caps the sweep: a past WSL out-of-memory crash is on record, and a runaway git
+#   on a 1 GB repo must not take the whole VM with it.
+# - HOME is set explicitly: ~/dev, ~/.claude and ~/dev/.lodestar all resolve from it, and a
+#   system unit does not get a login environment.
+# - --quiet keeps stdout empty; the journal holds only real errors. Liveness is the
+#   "Last sweep" line in ~/dev/Lodestar/SYNC.md. Failure signal: `journalctl -u lodestar-sync`.
+# - Kill switch: `touch ~/dev/Lodestar/PAUSE` halts every sweep, no unit change needed.
+[Unit]
+Description=Lodestar sync sweep (bin/sync.py)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=lodestar-user
+Group=lodestar-user
+Environment=HOME=/home/lodestar-user
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+WorkingDirectory=/home/lodestar-user
+ExecStart=/usr/bin/python3 /home/lodestar-user/dev/Lodestar/bin/sync.py --quiet
+MemoryMax=2G
+Nice=10
+IOSchedulingClass=idle
+# Must outlast sync.py HARD_DEADLINE_S (55 min) plus the sweep lock wait, so the watchdog (which
+# records where it was stuck) fires before systemd kills the unit blind. Pinned by a test.
+TimeoutStartSec=62min

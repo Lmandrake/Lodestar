@@ -1,0 +1,5 @@
+#!/bin/sh
+# Lodestar's private-text guard, last gate before github.com (ruling 5, 2026-10-13): refuses to push
+# any commit not yet on a remote whose message, paths or content fail bin/lib/proseguard.py.
+top=$(git rev-parse --show-toplevel) || exit 1
+exec python3 "$top/bin/prose_guard.py" --outgoing

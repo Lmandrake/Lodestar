@@ -1,0 +1,5 @@
+SYNC.md
+__pycache__/
+*.pyc
+conversations/
+handoffs/

@@ -1,0 +1,15 @@
+# Hourly, like StartInterval 3607 on the Macs. Hourly is a deliberate ceiling on traffic:
+# cross-machine latency IS this interval, and `bin/sync.py` by hand is the escape hatch.
+# Persistent=true runs a missed sweep at the next boot/WSL start instead of skipping it.
+# :07 past, off-round, with jitter, so it does not land on the same instant as other timers.
+[Unit]
+Description=Hourly Lodestar sync sweep
+
+[Timer]
+OnCalendar=*-*-* *:07:00
+RandomizedDelaySec=120
+Persistent=true
+Unit=lodestar-sync.service
+
+[Install]
+WantedBy=timers.target

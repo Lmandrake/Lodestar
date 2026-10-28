@@ -1,0 +1,45 @@
+# Which machines the UNATTENDED hourly sweep may arm a purge on.
+#
+# The owner's ruling: per-machine interactive arming meant a headless home machine could never
+# execute a purge and a fleet-wide purge would stay permanently half-applied there, so
+# unattended arming is declared per machine here.
+#
+# 🔴 WHAT THIS DOES AND DOES NOT REMOVE FROM THE PATH. A purge already requires all of:
+#
+#   1. a proposed plan naming the checkout and the HOST/OWNER/REPO coordinate,
+#   2. an explicit approval on the originating machine, with the whole fleet-wide consequence
+#      printed and an `Are you sure?` — including `THERE IS NO UNDO`,
+#   3. arming on the machine that executes.
+#
+# Naming a machine here removes **only step 3, and only on that machine**. Steps 1 and 2 are
+# untouched, so this does not create an unreviewed deletion: it makes an approval you have
+# already given take effect without a second visit. That is the whole distinction, and it is
+# why this file is a committed declaration rather than a setting — it is reviewable in a diff,
+# revocable in a diff, and every machine can see what every other machine is permitted to do.
+#
+# One selector per line: a machine key from `machines.md`, a label, or `all`. Lines are joined
+# as any-of, so rolling out one box at a time is the natural use. `#` comments and blanks are
+# ignored.
+#
+# 🔴 AN EMPTY OR MISSING FILE ARMS NOBODY, AND THAT IS NOT WHAT THE SELECTOR GRAMMAR DOES ON
+# ITS OWN. `machine.selector_matches` treats an EMPTY spec as matching EVERY machine — which is
+# the right default for "which machines does this skill apply to" and catastrophic here, since a
+# truncated or accidentally-emptied file would arm the entire fleet for an irreversible act.
+# `purge.sweep_may_arm` therefore refuses an empty selector BEFORE consulting the grammar, and
+# `tests/test_purge_arming.py` pins that in both directions.
+#
+# To revoke, delete the line and commit. Until the sweep picks it up (hourly) the machine stays
+# armed, so for an urgent revocation also run `bin/sync.py` on it, or neutralise it there by
+# removing the approval — which is faster, being machine-reachable without this file.
+
+# Lukas, 2026-10-01: *"I want it to work. Make it work."*
+#
+# `all` rather than a list, and the reasoning is the point: ANY machine left off this list
+# reproduces exactly the defect he rejected, just smaller. A purge that completes on two of
+# three machines is still reported done while material stays on the third — the
+# permanently-half-applied state the whole repo-lifecycle loop exists to end. A partial
+# declaration is that bug with a shorter blast radius, not a safer design.
+#
+# What protects him is steps 1 and 2 above, which this does not touch. Narrowing this to
+# specific machine keys is a one-line diff if he wants it.
+all

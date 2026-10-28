@@ -1,0 +1,13 @@
+{
+  "_comment": "The test suite's private boundary (tests/__init__.py points LODESTAR_PRIVATE_CONFIG here): invented, reserved-domain values, so no test depends on a real deployment.",
+  "host": "git.private.example",
+  "root": "~/dev/private-store",
+  "class": "private",
+  "ref_tag": "private",
+  "pointer_prefix": "Prose for this loop lives in the private store: ",
+  "address_domains": ["private.example"],
+  "owner_addresses": ["owner@work.private.example"],
+  "public_email": "owner@public.example",
+  "org_words": [],
+  "legacy_root_env": []
+}

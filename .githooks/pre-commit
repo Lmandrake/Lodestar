@@ -1,0 +1,6 @@
+#!/bin/sh
+# Lodestar's private-text guard (ruling 5, 2026-10-13). Installed by the sweep as core.hooksPath.
+# Refuses a commit that would put loop prose, a journal note, a private-class path or a private marker
+# into Lodestar's github.com history. `python3 bin/prose_guard.py --fix` moves the prose.
+top=$(git rev-parse --show-toplevel) || exit 0
+exec python3 "$top/bin/prose_guard.py" --staged
