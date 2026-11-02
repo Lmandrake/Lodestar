@@ -47,7 +47,7 @@ python3 ~/dev/Lodestar/bin/ticket.py need --from opencodecli --to lodestar --nam
 ```
 
 It lands in the target's inbox as `proposed`; the target accepts (`move ID open`) or declines
-(`drop ID --said ...`). `ticket inbox --project lodestar` lists what waits.
+(`drop ID`). `ticket inbox --project lodestar` lists what waits.
 
 ## Work them
 
@@ -55,10 +55,10 @@ It lands in the target's inbox as `proposed`; the target accepts (`move ID open`
 ticket list --project P [--mine] [--type bug] [--status blocked] [--closed]   ticket list --all
 ticket show ID       ticket search WORDS       ticket inbox [--project P]
 ticket move ID active|blocked|open           ticket edit ID --due D --next --note "..."
-ticket close ID --said "his words" | --evidence commit:<sha>    ticket drop ID --said "..."
+ticket close ID [--said "his words" | --evidence commit:<sha>]    ticket drop ID [--said "..."]
 ticket link ID --blocked-by ID2 | --blocks ID2 | --relates ID2 | --ref commit:<sha>
 ticket link ID --blocked-on "a rainy day" | "until 2026-11-01" | owner/repo#N [--host <private host>] | <issue URL>
-ticket link ID --met "a rainy day" (--said "his words" | --evidence TEXT)
+ticket link ID --met "a rainy day" [--said "his words" | --evidence TEXT]
 ticket link ID --unblock ID2   ticket ready [--project P | --all]   ticket close ID ... --release
 ticket check [--project P]     ticket homes     ticket face   (the Companion TICKETS row)
 ```
@@ -99,7 +99,8 @@ ticket check [--project P]     ticket homes     ticket face   (the Companion TIC
   private-store overlay; a github.com tool repo (Lodestar, Fetcher, …) refuses work markers and takes
   `--private` to file that one ticket in its overlay. In a github.com session, `list`/`show` of a
   private-host project print ids and dates only: do not work around that.
-- **Closing needs a reason**: his words (`--said`) or evidence (`--evidence commit:<sha>`).
+- **Closing takes an optional reason**: his words (`--said`) or evidence (`--evidence
+  commit:<sha>`), recorded when given; none is required (owner ruling 2026-10-31, D31).
 - **An undeclared project is refused by name**: add a row to `sync/ticket-homes.md` (Lodestar
   repo) with a unique code; Drive-only projects have no git repo and keep Lodestar board loops.
 - **Commits carry the id and verb only** (`ticket: LODE-12 close`), never the title.

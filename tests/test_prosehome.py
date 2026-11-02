@@ -8,7 +8,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin"))
 
-from lib import privatestore, prosehome  # noqa: E402
+from lib import privatestore, prosehome, tickets  # noqa: E402
 from tests.test_reckoning import make_checkout  # noqa: E402
 from tests import needs_private, real_home_key  # noqa: E402
 
@@ -42,6 +42,18 @@ class PlaceTest(ProseHomeBase):
         got = prosehome.place(self.github, "conversations")
         self.assertEqual(got.where, prosehome.STORE)
         self.assertEqual(got.path, os.path.join(self.store, "projects", "Thing", "conversations"))
+
+    def test_a_named_exception_stays_in_the_repo_on_a_work_mac(self):
+        repo = make_checkout(os.path.join(self.d, "Example_Private"), GITHUB)
+        placed = prosehome.place(repo, "conversations")
+        self.assertEqual((placed.where, placed.path),
+                         (prosehome.REPO, os.path.join(repo, "conversations")))
+        self.assertEqual(prosehome.place(repo, "handoffs").where, prosehome.REPO)
+
+    def test_a_named_exception_is_not_a_public_ticket_home(self):
+        repo = make_checkout(os.path.join(self.d, "Example_Private"), GITHUB)
+        self.assertFalse(tickets._is_public(repo))
+        self.assertTrue(tickets._is_public(self.github))
 
     def test_a_private_repo_keeps_its_prose(self):
         repo = make_checkout(os.path.join(self.d, "Internal"), PRIVATE_URL)

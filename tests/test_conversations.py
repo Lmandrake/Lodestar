@@ -15,9 +15,9 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
-from lib import conversations, gitutil, prosehome
-from tests import needs_private  # noqa: E402
+from lib import conversations, gitutil, paths, prosehome
 
 
 def _line(**fields):
@@ -37,6 +37,15 @@ class ConversationTest(unittest.TestCase):
         # `TestPrivatePlacement` below covers a work Mac.
         os.environ["LODESTAR_PRIVATE_ROOT"] = os.path.join(self.tmp, "no-private-store")
         os.environ["LODESTAR_MACHINE"] = "tower"
+        # A fixture machines.md that registers `tower` as a home machine (not the real fleet file:
+        # an unregistered key reads as `work`, which withholds).
+        fleet = os.path.join(self.tmp, "machines.md")
+        with io.open(fleet, "w", encoding="utf-8") as handle:
+            handle.write("| Key | Role | Locks | Labels |\n|-----|------|-------|--------|\n"
+                         "| tower | home | remove | home |\n")
+        patcher = mock.patch.object(paths, "machines_file", return_value=fleet)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         prosehome.reset_cache()
         self.addCleanup(self._restore_home)
 
@@ -106,7 +115,6 @@ class TestNoClock(ConversationTest):
         for found in re.findall(r"\d{4}-\d{2}-\d{2}", text):
             self.assertEqual(found, "2026-10-04")
 
-    @needs_private("machines.md")
     def test_writing_twice_reports_unchanged_the_second_time(self):
         root = self.git_repo()
         path = self.simple(root)
@@ -399,7 +407,6 @@ class TestDrive(ConversationTest):
             else:
                 os.environ["HOME"] = old
 
-    @needs_private("machines.md")
     def test_writing_into_a_drive_folder_creates_no_git_directory(self):
         folder = os.path.join(self.tmp, "drive-project")
         os.makedirs(folder)
@@ -421,7 +428,6 @@ class TestSweepClassification(ConversationTest):
         source, sweepable = gitutil.partition_paths([relative])
         self.assertEqual((source, sweepable), ([], [relative]))
 
-    @needs_private("machines.md")
     def test_a_record_trips_neither_the_secret_nor_the_size_guard(self):
         root = self.git_repo()
         target, _ = conversations.write_record(root, self.simple(root))
@@ -438,7 +444,6 @@ class TestRecordNaming(ConversationTest):
         self.assertEqual(conversations.record_name(self.simple(root)),
                          "2026-10-04-0915-abcd1234.md")
 
-    @needs_private("machines.md")
     def test_the_path_lands_in_the_record_directory(self):
         root = self.git_repo()
         path = conversations.record_path(root, self.simple(root))
@@ -516,7 +521,6 @@ class TestReview(ConversationTest):
         self.assertIsNot(cli, conversations)
         return cli
 
-    @needs_private("machines.md")
     def test_a_word_is_matched_on_its_boundaries_not_as_a_substring(self):
         """Measured: without \\b, "itar" matched inside "military" and produced 5 of 7
         hits on a real repo. A review that cries wolf is one the reader skips."""
@@ -539,7 +543,6 @@ class TestReview(ConversationTest):
         self.assertEqual(cli.cmd_review(root), 1,
                          "a standalone term must still be surfaced for review")
 
-    @needs_private("machines.md")
     def test_a_repo_with_no_records_is_not_an_error(self):
         cli = self.cli()
         root = os.path.join(self.tmp, "bare")

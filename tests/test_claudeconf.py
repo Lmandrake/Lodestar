@@ -1024,3 +1024,56 @@ class TestMemoryGoesToPrivateOnAWorkMac(ConfTest):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestPendingCapturesSurface(ConfTest):
+    """A capture nobody adopts must be visible, not sit in a folder (CLAUDEMD_DRIFT_FIX_THE_ADOPT_NOBODY_RAN)."""
+
+    def seed(self, key, name, text="{}\n"):
+        target = os.path.join(claudeconf.paths.claude_adopt_dir(key), name)
+        claudeconf._write(target, text)
+        return target
+
+    def test_pending_lists_a_stale_settings_capture_on_another_machine(self):
+        old = self.seed("other-box", "20260901T150556-settings.json")
+        self.seed("other-box", "done/20260801T000000-settings.json")  # adopted: not pending
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = self.run_cmd("pending")
+        self.assertEqual(code, 1, "a capture older than one sweep must fail the exit code")
+        self.assertIn(os.path.basename(old), out.getvalue())
+        self.assertIn("settings.json", out.getvalue())
+        self.assertNotIn("20260801T000000", out.getvalue())
+
+    def test_a_fresh_capture_is_listed_but_not_stale(self):
+        import datetime
+        now = datetime.datetime(2026, 10, 31, 12, 0, 0)
+        self.seed("test-box", "20261031T115000-CLAUDE.md")
+        self.assertEqual(len(claudeconf.adopt_queue(now=now)), 1)
+        self.assertEqual(claudeconf.stale_captures(now=now), [])
+
+    def test_the_sweep_report_flags_a_stale_capture(self):
+        import sync
+        self.seed("test-box", "20260901T150556-settings.json")
+        with mock.patch.object(claudeconf, "converge_claudemd",
+                               return_value=(claudeconf.CURRENT, "up to date")), \
+                mock.patch.object(claudeconf, "skills_state", return_value=([], [])), \
+                mock.patch.object(sync.claudesettings, "converge_settings",
+                                  return_value=(sync.claudesettings.CURRENT, "up to date")), \
+                mock.patch.object(sync.claudesettings, "report", return_value=([], [])), \
+                mock.patch.object(sync.claudestatusline, "is_enabled", return_value=False):
+            result = sync.claude_config_step(dry_run=True)
+        self.assertEqual(result.outcome, sync.FLAGGED, result.detail)
+        self.assertIn("older than one sweep", result.detail)
+        self.assertIn("claudeconf.py pending", result.detail)
+
+    def test_retiring_moves_only_this_kind_on_this_machine(self):
+        mine = self.seed("test-box", "20260901T150556-settings.json")
+        keep = self.seed("test-box", "20260901T150557-CLAUDE.md")
+        theirs = self.seed("other-box", "20260901T150556-settings.json")
+        self.assertEqual(claudeconf.retire_captures("settings.json"), [mine])
+        self.assertFalse(os.path.exists(mine))
+        self.assertTrue(os.path.exists(os.path.join(os.path.dirname(mine), "done",
+                                                    os.path.basename(mine))))
+        self.assertTrue(os.path.exists(keep))
+        self.assertTrue(os.path.exists(theirs))

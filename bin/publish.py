@@ -5,9 +5,9 @@
     bin/publish.py scan <repo>      # every scanner class; exit 1 on any unallowed hit
     bin/publish.py review <repo>    # cold second-model read of the tree: a hard release gate
     bin/publish.py prompt-eval      # score the cold-read prompt on the private labelled fixture
-    bin/publish.py rule <repo> --owner-said "<his words>"   # rule over a FINDINGS cold read
+    bin/publish.py rule <repo> [--owner-said TEXT]   # rule over a FINDINGS cold read
     bin/publish.py diff <repo>      # built tree vs the last released tree: the human gate
-    bin/publish.py release <repo> --approved-by "<owner's words>"
+    bin/publish.py release <repo> [--approved-by TEXT]   # words optional (D31)
     bin/publish.py verify [<repo>]  # re-scan the public HEAD (every manifest with a remote)
 
 Private inputs (manifests `<repo>.toml`, names/terms/hosts lists, reports, `releases.jsonl`) live
@@ -133,11 +133,11 @@ def main(argv=None) -> int:
         p.set_defaults(fn=fn)
     p = sub.add_parser("release")
     p.add_argument("repo", type=check_repo_name)
-    p.add_argument("--approved-by", required=True, help="the owner's own words of approval")
+    p.add_argument("--approved-by", default="", help="optional provenance (D31)")
     p.set_defaults(fn=cmd_release)
     p = sub.add_parser("rule", help="record an owner ruling over the current FINDINGS cold read")
     p.add_argument("repo", type=check_repo_name)
-    p.add_argument("--owner-said", required=True, help="the owner's own words, verbatim")
+    p.add_argument("--owner-said", default="", help="optional provenance, verbatim (D31)")
     p.set_defaults(fn=cmd_rule)
     p = sub.add_parser("prompt-eval", help="score a cold-read prompt on the labelled fixture")
     p.add_argument("--prompt", choices=("current", "v1"), default="current")

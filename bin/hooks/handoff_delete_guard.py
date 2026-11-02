@@ -45,6 +45,7 @@ def _lexed_hit(command: str):
     import os
     here = os.path.dirname(os.path.abspath(__file__))
     for d in (os.path.expanduser(os.path.join(os.environ.get("MACHINIST_DIR", ""), "tools", "hooks")),
+              os.path.expanduser("~/dev/Machinist/tools/hooks"),
               os.path.join(here, "..", "..", "..", "Machinist", "tools", "hooks")):
         if os.path.isfile(os.path.join(d, "shell_lex.py")):
             sys.path.insert(0, d)

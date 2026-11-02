@@ -2,8 +2,8 @@
 
 Each adapter is the whole contract between a store and the resolver: what its items are, which
 of them are live, their decoded `check`, a version token, and a version-guarded close through
-the store's own DONE verb. Nothing here drops, cancels, lapses or ends a standing watch: those
-are his word only. A new store is a new adapter registered the same way (see `lib/outcome.py`,
+the store's own DONE verb. Nothing here drops, cancels, lapses or ends a standing watch: the
+automated resolver closes only on SATISFIED (an agent acting by hand may do the rest, D31). A new store is a new adapter registered the same way (see `lib/outcome.py`,
 "How to add a STORE"); the resolver does not change.
 
   alerts     Bearing's conversation alerts (machine-local `bearing-conversations.json`)

@@ -1368,6 +1368,16 @@ def claude_config_step(dry_run: bool) -> Result:
         except Exception as error:
             problems.append("snapshot commit failed: %s" % error)
 
+    try:
+        # A capture that outlived its sweep is one nobody is adopting (ticket
+        # CLAUDEMD_DRIFT_FIX_THE_ADOPT_NOBODY_RAN). First, so the [:3] cut cannot hide it.
+        stale = claudeconf.stale_captures(machine.key())
+        if stale:
+            problems.insert(0, "%d capture(s) in claude/adopt/%s older than one sweep — "
+                               "run: claudeconf.py pending" % (len(stale), machine.key()))
+    except Exception as error:
+        problems.append("adopt-queue check failed: %s" % error)
+
     if problems:
         return Result(name, path, FLAGGED, "; ".join(problems[:3]), actions)
     if not actions:
@@ -1522,6 +1532,31 @@ def enrollment_state(entries) -> Tuple[List[str], List[str], Dict[str, List[str]
 ADVISORY_VOLUME_SUPPRESSED = ("missing-id",)
 
 
+def stranded_checkouts(rows, role: Optional[str],
+                       key: Optional[str]) -> List[Tuple[str, str, str]]:
+    """(name, path, why) for every checkout ON DISK here whose row says it should not be.
+
+    A row that is `retired`, or whose `Machines` column leaves this machine out, is never
+    swept — and that silence is the defect: archmagi audit 2026-10-30 found three retired
+    checkouts and a de-scoped repo sitting in ~/dev with SYNC.md listing them only as
+    off / not-carried. Existence only, on the row's own expanded path: no realpath
+    comparison, so a symlinked dev root (archmagi) behaves exactly like a real one.
+    """
+    found = []  # type: List[Tuple[str, str, str]]
+    for entry in rows:
+        why = []
+        if (entry.state or "").strip().lower() == registry.RETIRED:
+            why.append("row is retired")
+        if not registry.on_machine(entry, role, key):
+            why.append("`Machines` (%s) leaves this machine out" % ",".join(entry.machines))
+        if not why:
+            continue
+        path = os.path.expanduser(entry.path)
+        if os.path.isdir(path):
+            found.append((entry.name, path, "; ".join(why)))
+    return sorted(found)
+
+
 def report(results: List[Result], our_role: str, dry_run: bool,
            excluded_entries, elsewhere_entries=(),
            freshness_verdict: Optional[freshness.Verdict] = None,
@@ -1529,7 +1564,8 @@ def report(results: List[Result], our_role: str, dry_run: bool,
            desired_state_faults: Optional[List[validate.Fault]] = None,
            enrollment: Optional[Tuple[List[str], List[str], Dict[str, List[str]]]] = None,
            remote_audit: Optional[RemoteAudit] = None,
-           mirror_outcomes: Optional[List[mirrors.Outcome]] = None) -> str:
+           mirror_outcomes: Optional[List[mirrors.Outcome]] = None,
+           stranded: Optional[List[Tuple[str, str, str]]] = None) -> str:
     ranked = sorted(results, key=lambda r: (ORDER.get(r.outcome, 9), r.name))
     icon = ICON
 
@@ -1558,6 +1594,20 @@ def report(results: List[Result], our_role: str, dry_run: bool,
         lines.append("")
         for result in flagged:
             lines.append("- **%s** — %s" % (result.name, result.detail))
+        lines.append("")
+
+    # A checkout whose row says it should not be here is never swept, so nothing else in this
+    # report would ever mention it (SWEEP_FIX_RETIRED_CHECKOUTS_UNSEEN). Report-only: the
+    # sweep never moves or deletes a checkout on the strength of this list.
+    if stranded:
+        lines.append("## 🚩 Checkouts that should not be here — %d" % len(stranded))
+        lines.append("")
+        lines.append("On disk on this machine, but the registry row is retired or scoped to "
+                     "other machines, so the sweep never touches them. Retire them through a "
+                     "lifecycle plan or move them to the agent storage root's `retired-trees/`.")
+        lines.append("")
+        for name, path, why in stranded:
+            lines.append("- **%s** — `%s`: %s" % (name, path, why))
         lines.append("")
 
     # Mirror states are listed here when they need him, but never as repo rows: a mirror
@@ -2276,11 +2326,17 @@ def _sweep(args):
         # to this sweep completing, so a re-stamp every sweep is the point, not redundancy.
         heartbeat.write_line()
 
+    try:
+        stranded = stranded_checkouts(registry.entries(role=our_role, key=machine.key()),
+                                      our_role, machine.key())
+    except Exception as error:  # a broken reporter must report, never crash the sweep
+        stranded = [("stranded-checkouts", "", "check failed, checked nothing: %s" % error)]
+
     text = report(results, our_role, args.dry_run,
                   registry.excluded(role=our_role, key=machine.key()),
                   registry.elsewhere(role=our_role, key=machine.key()),
                   freshness_verdict, push_mismatches, desired_state_faults,
-                  enrollment, remote_audit, mirror_outcomes)
+                  enrollment, remote_audit, mirror_outcomes, stranded)
     with open(paths.sync_report_file(), "w", encoding="utf-8") as handle:
         handle.write(text)
     status = write_status(results, our_role, args.dry_run, freshness_verdict, push_mismatches,

@@ -231,9 +231,12 @@ class TestMoves(Base):
         self.t1 = tk.create("alpha", "One", "build", root=self.root)[0]
         self.t2 = tk.create("alpha", "Two", "build", root=self.root)[0]
 
-    def test_close_needs_reason(self):
-        with self.assertRaisesRegex(tk.Refused, "--said"):
-            tk.move(self.t1, "done", root=self.root)
+    def test_close_needs_no_words_and_records_them_when_given(self):
+        f, _ = tk.move(self.t2, "dropped", root=self.root)                  # D31: no words
+        self.assertEqual((f["status"], f["close_reason"]), ("dropped", "no reason given"))
+        f, _ = tk.move(self.t1, "done", root=self.root)
+        self.assertEqual((f["status"], f["close_reason"]), ("done", "no reason given"))
+        f, _ = tk.move(self.t1, "open", root=self.root)
         f, _ = tk.move(self.t1, "done", said="done, shipped", root=self.root)
         self.assertEqual((f["status"], f["close_reason"]), ("done", "said: done, shipped"))
         f, _ = tk.move(self.t1, "open", root=self.root)
@@ -399,8 +402,6 @@ class TestNonTicketBlockers(Base):
 
     def test_met_needs_who_and_logs_it(self):
         tk.link(self.t2, "blocked_on", "a rainy day", root=self.root)
-        with self.assertRaisesRegex(tk.Refused, "--said"):
-            tk.link(self.t2, "met", "a rainy day", root=self.root)
         with self.assertRaisesRegex(tk.Refused, "no non-ticket blocker"):
             tk.link(self.t2, "met", "sunshine", root=self.root, said="x")
         tk.link(self.t2, "met", "a rainy day", root=self.root, said="it rained")

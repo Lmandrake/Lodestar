@@ -6,6 +6,7 @@ subjects, colleagues' words, internal project detail), and a repo whose push URL
 would publish it. Classifying the prose is not possible, so the rule is about the REPO and the
 MACHINE, and it is deterministic:
 
+* a repo in `IN_REPO` keeps its prose everywhere, by the owner's named ruling;
 * a repo that can push only to the private host (`lib.boundary`) keeps its prose in the repo;
 * any other repo's prose goes to the overlay `<private store>/projects/<RepoName>/<sub>`,
   when this machine holds a private-store checkout that itself pushes only to the private host;
@@ -36,6 +37,11 @@ WITHHELD = "withheld"
 
 WORK_LABEL = "work"
 OVERLAY_DIR = "projects"
+
+#: Repo directories that keep all their prose in the repo on every machine, work Macs included.
+#: Owner, 2026-10-31: Example_Private is ruled private and appropriate for personal data; it needs
+#: no split. Its content is personal, not employer material, and the repo is private.
+IN_REPO: frozenset = frozenset({"Example_Private"})
 
 
 class Placement(NamedTuple):
@@ -92,6 +98,8 @@ def place(repo: str, sub: str, store: Optional[str] = None,
           machine_key: Optional[str] = None) -> Placement:
     """Where `<repo>/<sub>` prose belongs on this machine."""
     repo = os.path.realpath(os.path.expanduser(repo))
+    if os.path.basename(repo.rstrip(os.sep)) in IN_REPO:
+        return Placement(REPO, os.path.join(repo, sub), "owner ruling: this repo holds its own prose")
     if repo_is_private(repo):
         return Placement(REPO, os.path.join(repo, sub), "repo pushes only to the private host")
     try:

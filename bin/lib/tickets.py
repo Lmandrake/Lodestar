@@ -23,7 +23,7 @@ Design notes are kept in the private store; decision D30 in
   YYYY-MM-DD`, clears when today reaches it); an **external issue** (stored as the full URL on
   github.com or the private host, clears when `gh api --hostname` says closed, "unknown" when
   unreachable, never guessed done); anything else is a **free-text condition** that never clears
-  by itself and is ended with `link ID --met TEXT --said/--evidence`. Only ticket ids take part in
+  by itself and is ended with `link ID --met TEXT [--said/--evidence]`. Only ticket ids take part in
   the cycle check and the inverse `blocks` side.
 * **Every ticket carries a `check`** (2026-10-22, `lib/outcome.py`): an outcome check spec in
   compact JSON, or an explicit coverage gap when its creator gave none (`create`). The resolver
@@ -140,9 +140,12 @@ def _row(project: str, rows: List[Dict[str, str]], entries) -> Dict[str, str]:
 
 def _is_public(repo: str) -> bool:
     try:
-        from lib import reckoning
+        from lib import prosehome, reckoning
     except ImportError:  # pragma: no cover
+        import prosehome  # type: ignore
         import reckoning  # type: ignore
+    if os.path.basename(os.path.realpath(repo).rstrip(os.sep)) in prosehome.IN_REPO:
+        return False
     return not reckoning.private_only(repo)
 
 
@@ -809,10 +812,8 @@ def move(tid: str, status: str, said: str = "", why: str = "", root: Optional[st
         "evidence: " + evidence.strip() if evidence.strip() else why.strip())
     ch: Dict[str, Optional[str]] = {"status": status}
     if status in TERMINAL:
-        if not reason:
-            raise Refused("%s %s needs --said \"his words\" or --evidence commit:<sha>" % (
-                "close" if status == "done" else "drop", tid))
-        ch["close_reason"] = reason
+        # D31 (2026-10-31): a close or drop needs no owner words; a reason is recorded if given
+        ch["close_reason"] = reason or "no reason given"
         ch["closed"] = _stamp()
     elif cur in TERMINAL:
         ch["close_reason"] = None
@@ -1160,8 +1161,6 @@ def link(tid: str, rel: str, other: str, root: Optional[str] = None,
             ch["status"] = "blocked"
         return [update(tid, "link blocked_by %s" % entry, root, push, **ch)[1]]
     if rel == "met":
-        if not (said.strip() or evidence.strip()):
-            raise Refused("--met needs --said \"his words\" or --evidence <what shows it>")
         a, _ = find(tid, root)
         cur = split(a.get("blocked_by") or "")
         want = " ".join(other.split())
@@ -1175,7 +1174,8 @@ def link(tid: str, rel: str, other: str, root: Optional[str] = None,
             raise Refused("%s has no non-ticket blocker %r (blockers: %s)" % (
                 tid, want, ", ".join(cur) or "none"))
         rest = [x for x in cur if x != hit[0]]
-        why = ("said: " + said.strip()) if said.strip() else ("evidence: " + evidence.strip())
+        why = ("said: " + said.strip()) if said.strip() else (
+            "evidence: " + evidence.strip() if evidence.strip() else "no reason given")
         return [update(tid, "met %s (%s)" % (hit[0], why), root, push,
                        blocked_by=", ".join(rest) if rest else None)[1]]
     inverse = {"blocks": "blocked_by", "blocked_by": "blocks", "relates": "relates"}

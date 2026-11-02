@@ -749,16 +749,15 @@ class Refusals(PublishBase):
                 review_mod.rule("Demo", self.WORDS)
         self.assertFalse(os.path.exists(rec["path"][:-5] + ".ruling.json"))
 
-    def test_rule_needs_real_words(self):
+    def test_rule_needs_no_words_and_records_them_when_given(self):
         self._findings_receipt()
-        for words in ("", "   ", "ok"):
-            with self.assertRaisesRegex(PublishError, "owner's own words"):
-                review_mod.rule("Demo", words)
+        self.assertEqual(review_mod.rule("Demo", "")["owner_said"], review_mod.NO_WORDS)
+        self.assertEqual(review_mod.rule("Demo", "ok")["owner_said"], "ok")
 
     def test_rule_cli(self):
         self._findings_receipt()
         import publish as cli
-        self.assertEqual(cli.main(["rule", "Demo", "--owner-said", "x"]), 2)
+        self.assertEqual(cli.main(["rule", "Demo"]), 0)                    # D31: no words
         self.assertEqual(cli.main(["rule", "Demo", "--owner-said", self.WORDS]), 0)
 
     def test_cold_read_receipt_is_bound_to_the_tree(self):
@@ -803,8 +802,9 @@ class Refusals(PublishBase):
         self.assertIn("===== FILE: f0.md", "".join(parts))
         self.assertTrue(all(len(p) < 1200 for p in parts))
 
-    def test_release_refuses_without_owner_words(self):
-        with self.assertRaisesRegex(PublishError, "owner"):
+    def test_release_needs_no_owner_words(self):
+        # D31: the gate is the build/scan/review chain, not words; with no tree it still refuses
+        with self.assertRaisesRegex(PublishError, "no built tree"):
             release_mod.release("Demo", "  ")
 
     def test_replacement_applies_and_stale_one_refused(self):

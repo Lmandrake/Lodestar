@@ -117,12 +117,12 @@ class Refused(Exception):
 
 # --------------------------------------------------------------------------- vocabulary
 
-_REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-_LOGIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}$")
-_SHA = re.compile(r"^[0-9a-f]{7,40}$")
-_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$")
-_DAY = re.compile(r"^\d{4}-\d\d-\d\d$")
-_STORE = re.compile(r"^[a-z][a-z0-9_-]{0,30}$")
+_REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\Z")
+_LOGIN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}\Z")
+_SHA = re.compile(r"^[0-9a-f]{7,40}\Z")
+_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}\Z")
+_DAY = re.compile(r"^\d{4}-\d\d-\d\d\Z")
+_STORE = re.compile(r"^[a-z][a-z0-9_-]{0,30}\Z")
 
 
 def is_repo(v) -> bool:
@@ -189,7 +189,7 @@ def register_check(name: str, params: Dict[str, Callable[[Any], bool]],
     """Add a check kind to the closed vocabulary. Re-registering a name replaces it.
     `closes=False` (or a predicate on the spec) marks a fact-grade kind: its SATISFIED is
     evidence, never by itself a closure."""
-    if name in ("gap", "cmd") or not re.match(r"^[a-z][a-z0-9_]{1,40}$", name):
+    if name in ("gap", "cmd") or not re.match(r"^[a-z][a-z0-9_]{1,40}\Z", name):
         raise ValueError("bad or reserved check kind name %r" % name)
     _CHECKS[name] = CheckKind(name, dict(params), run, dict(optional or {}), ttl_min, local,
                               closes)
@@ -228,6 +228,8 @@ def validate_spec(spec, trusted: bool = False) -> Dict:
     if not isinstance(spec, dict):
         raise ValueError("check spec must be an object")
     kind = spec.get("type")
+    if not isinstance(kind, str):
+        raise ValueError("check spec needs a string type, got %s" % type(kind).__name__)
     if kind == "gap":
         extra = set(spec) - {"type", "reason", "review_by"}
         if extra:
@@ -290,15 +292,30 @@ def encode(spec: Optional[Dict]) -> str:
     return json.dumps(spec, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
+def _no_dup_keys(pairs):
+    seen = {}
+    for k, v in pairs:
+        if k in seen:
+            raise ValueError("duplicate key %r" % k)
+        seen[k] = v
+    return seen
+
+
+def loads(text):
+    """json.loads that refuses duplicate keys (stdlib silently keeps the last)."""
+    return json.loads(text, object_pairs_hook=_no_dup_keys)
+
+
 def decode(text) -> Optional[Dict]:
-    """A stored spec back to a dict; None for empty. ValueError for unparseable text."""
+    """A stored spec back to a dict; None for empty. ValueError for unparseable text
+    or a duplicated key."""
     if isinstance(text, dict):
         return text
     text = (text or "").strip()
     if not text:
         return None
     try:
-        out = json.loads(text)
+        out = loads(text)
     except ValueError as e:
         raise ValueError("check is not JSON: %s" % e)
     if not isinstance(out, dict):

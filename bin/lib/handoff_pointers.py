@@ -44,7 +44,7 @@ def parse(bullet: str) -> Tuple[str, Optional[Tuple[str, str]], Optional[Dict], 
     c = _CHECK.search(bullet)
     if c:
         try:
-            spec = outcome.validate_spec(json.loads(c.group(1)))
+            spec = outcome.validate_spec(outcome.loads(c.group(1)))
         except ValueError as e:
             problem = "pointer %s has an invalid check: %s" % (key, e)
     return key, ref, spec, problem

@@ -828,10 +828,10 @@ def outbox_put(detection: Dict, path: Optional[str] = None) -> None:
     """Durably queue one detection (machine-local, outside every repo). Idempotent on obs."""
     path = path or outbox_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    if detection["obs"] in {d.get("obs") for d in _read_outbox(path)}:
-        return
-    with _locked(path + ".lock"):
+    with _locked(path + ".lock"):  # check inside the lock: two producers cannot both append
         _repair_torn(path)
+        if detection["obs"] in {d.get("obs") for d in _read_outbox(path)}:
+            return
         with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(detection, sort_keys=True, ensure_ascii=False) + "\n")
             fh.flush()

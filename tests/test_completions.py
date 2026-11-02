@@ -361,7 +361,7 @@ class TestLoadReceipts(CompletionsTest):
         self.write("mt-001", {"p1": {"status": "converged", "fingerprint": "fp1"}})
         self.write("tower", {"p1": {"status": "not-named", "fingerprint": "fp1"}})
         found = completions.load_receipts(self.receipts)
-        self.assertEqual(sorted(found), ["tower", "mt-001"])
+        self.assertEqual(sorted(found), ["mt-001", "tower"])
 
     def test_ONE_CORRUPT_RECEIPT_DOES_NOT_BLANK_THE_WHOLE_VIEW(self):
         """A peer's broken file must cost only that peer's row.

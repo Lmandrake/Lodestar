@@ -218,6 +218,23 @@ class OutboxTest(Base):
         return {"event_id": eid, "subject": subject, "threads": [thread], "who": "Zebulon",
                 "pointer": "https://outlook/x"}
 
+    def test_concurrent_puts_of_one_obs_queue_it_once(self):
+        # Barrier: hold the outbox lock while four producers put the same obs, then release.
+        # With the membership check outside the lock all four pass it and append (ticket
+        # RECKONING_OUTBOX_FIX_CHECK_INSIDE_LOCK); inside the lock exactly one row lands.
+        import threading
+        import time as _time
+        box = rk.outbox_path()
+        det = rk.needs_you_detection(self.item(), "Orchard", "fp1", at=at())
+        with rk._locked(box + ".lock"):
+            ts = [threading.Thread(target=rk.outbox_put, args=(det,)) for _ in range(4)]
+            for t in ts:
+                t.start()
+            _time.sleep(0.5)
+        for t in ts:
+            t.join(10)
+        self.assertEqual(len(rk._read_outbox(box)), 1)
+
     def test_drain_is_idempotent_and_survives_a_crash_after_append(self):
         box = rk.outbox_path()
         det = rk.needs_you_detection(self.item(), "Orchard", "fp1", at=at())
@@ -494,9 +511,9 @@ KAIROS = """# Actions
   due:          null
   status:       active
 - id:           act_0003
-  title:        SENTINEL-kz letter to ZORRZ
+  title:        SENTINEL-kz letter to ACME
   next_action:  Draft it
-  project:      [[zorrz]]
+  project:      [[acme]]
   status:       active
 - id:           act_0004
   title:        Old thing

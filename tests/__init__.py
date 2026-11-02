@@ -113,6 +113,35 @@ def needs_private(*rels):
                                             "release)" % ", ".join(missing))
 
 
+# --- Tests that read this machine's git-ignored local state ---------------------------------
+#
+# `airlock/captures/`, `predrafts/`, `offers/`, `done/`, `executed/`, `requests/` and
+# `airlock/review/*.json` are git-ignored: a working checkout has them, a fresh clone does not.
+# A real-corpus test that runs without them fails on an empty corpus (or, worse, passes
+# vacuously), so it skips instead, naming what is missing. Where the data IS present nothing
+# skips and every assertion runs unchanged.
+LOCAL_STATE_REASON = "needs %s (git-ignored local state, absent in a fresh clone)"
+
+
+def _missing(rels):
+    return [r for r in rels if not os.path.exists(os.path.join(REPO_ROOT, r))]
+
+
+def needs_local(*rels):
+    """`unittest.skipUnless` every repo-relative path in `rels` exists in this checkout."""
+    import unittest
+    missing = _missing(rels)
+    return unittest.skipUnless(not missing, LOCAL_STATE_REASON % ", ".join(missing))
+
+
+def require_local(*rels):
+    """The same check at call time, for a helper (`_real()`) or a `setUp`: raises SkipTest."""
+    missing = _missing(rels)
+    if missing:
+        import unittest
+        raise unittest.SkipTest(LOCAL_STATE_REASON % ", ".join(missing))
+
+
 def real_key(role):
     """The machine key that holds `role` in the real machines.md (for the `needs_private` tests
     that pin the real fleet; real keys are not written into the public tests)."""

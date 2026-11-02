@@ -6,6 +6,7 @@
     claudeconf.py snapshot   # copy settings.json, statusline.sh, and auto-memory into the repo
     claudeconf.py import     # rebuild claude/global/ FROM the live file (recovery)
     claudeconf.py preview    # what WOULD this machine's file be, and what would it lose? (read-only)
+    claudeconf.py pending    # every capture in claude/adopt/ awaiting adoption, any machine
 
 `~/.claude/CLAUDE.md` holds the session-onboarding rule and the save-as-you-go authorization,
 and `~/.claude` is not a git repo, so none of it was versioned or backed up.
@@ -146,6 +147,69 @@ def adopt_dir():
 
 def pending_captures():
     return sorted(glob.glob(os.path.join(adopt_dir(), "*-CLAUDE.md")))
+
+
+#: One sweep: com.lodestar.sync's StartInterval (lib.companion.SWEEP_INTERVAL_S). A capture
+#: older than this has outlived the sweep that made it, so nobody is about to adopt it.
+ONE_SWEEP_S = 3607
+
+_CAPTURE_NAME = re.compile(r"^(\d{8}T\d{6})-(.+)$")
+
+
+def adopt_queue(key=None, now=None):
+    """Every capture awaiting adoption, of every kind: [(key, path, kind, age_seconds)].
+
+    All three convergers (CLAUDE.md, settings.json, statusline.sh) capture into the same
+    claude/adopt/<key>/, and until this existed nothing listed them: one machine's settings
+    captures sat there from 2026-09-01, and a hand edit to ~/.claude/CLAUDE.md lived only in
+    the live file for 3 days (ticket CLAUDEMD_DRIFT_FIX_THE_ADOPT_NOBODY_RAN). `key=None`
+    reads every machine's queue: the queue is in the repo, so any machine can see it.
+    Age comes from the filename stamp (local time, as `_stamp` writes it), not the mtime,
+    which a checkout resets.
+    """
+    import datetime
+    now = now if now is not None else datetime.datetime.now()
+    base = os.path.dirname(paths.claude_adopt_dir("x"))
+    keys = [key] if key else sorted(os.listdir(base)) if os.path.isdir(base) else []
+    queue = []
+    for each in keys:
+        where = paths.claude_adopt_dir(each)
+        if not os.path.isdir(where):
+            continue
+        for name in sorted(os.listdir(where)):
+            path = os.path.join(where, name)
+            match = _CAPTURE_NAME.match(name)
+            if not match or not os.path.isfile(path):
+                continue  # done/, *.tmp from an interrupted write, anything else
+            try:
+                made = datetime.datetime.strptime(match.group(1), "%Y%m%dT%H%M%S")
+            except ValueError:
+                made = datetime.datetime.fromtimestamp(os.path.getmtime(path))
+            queue.append((each, path, match.group(2),
+                          max(0.0, (now - made).total_seconds())))
+    return queue
+
+
+def retire_captures(kind, key=None):
+    """Move this machine's pending captures of `kind` to done/ after the adopt that answers them.
+
+    `settings --adopt` and `statusline --adopt` capture first and never moved anything, so their
+    captures stayed pending for ever and the stale-capture flag could never clear. Retained in
+    done/, never deleted, exactly as `mark_adopted` keeps CLAUDE.md captures.
+    """
+    moved = []
+    for _, path, each, _ in adopt_queue(key or machine.key()):
+        if each == kind:
+            done = os.path.join(os.path.dirname(path), "done")
+            os.makedirs(done, exist_ok=True)
+            os.replace(path, os.path.join(done, os.path.basename(path)))
+            moved.append(path)
+    return moved
+
+
+def stale_captures(key=None, now=None, max_age=ONE_SWEEP_S):
+    """The subset of `adopt_queue` older than one sweep: what the sweep report flags."""
+    return [entry for entry in adopt_queue(key, now) if entry[3] > max_age]
 
 
 def _read(path):
@@ -644,6 +708,8 @@ def cmd_statusline(args):
     if args.adopt:
         did, detail = claudestatusline.adopt_live(key, dry_run=args.dry_run)
         print("adopt: %s" % detail)
+        if did and not args.dry_run:
+            print("%d statusline capture(s) moved to done/" % len(retire_captures("statusline.sh")))
         return 0 if did or args.dry_run else 1
     if args.converge:
         outcome, detail = claudestatusline.converge(dry_run=args.dry_run, key=key)
@@ -1232,6 +1298,37 @@ def cmd_adopt(args):
     return 0
 
 
+def _age(seconds):
+    if seconds >= 86400:
+        return "%dd" % (seconds // 86400)
+    if seconds >= 3600:
+        return "%dh" % (seconds // 3600)
+    return "%dm" % (seconds // 60)
+
+
+def cmd_pending(args):
+    """List every capture awaiting adoption, on every machine (or --machine KEY).
+
+    Read-only. Exit 1 when anything is older than one sweep, so a script can gate on it.
+    """
+    queue = adopt_queue(args.machine.lower() if args.machine else None)
+    if not queue:
+        print("no pending captures")
+        return 0
+    stale = 0
+    for key, path, kind, age in queue:
+        late = age > ONE_SWEEP_S
+        stale += late
+        print("%s %-10s %-14s %5s  %s" % ("⚠" if late else " ", key, kind, _age(age),
+                                          path.replace(os.path.expanduser("~"), "~", 1)))
+    remedy = {"CLAUDE.md": "claudeconf.py adopt", "settings.json": "claudeconf.py settings --adopt",
+              "statusline.sh": "claudeconf.py statusline --adopt"}
+    kinds = sorted({kind for _, _, kind, _ in queue})
+    print("%d pending, %d older than one sweep — adopt on the machine named: %s"
+          % (len(queue), stale, "; ".join("%s: %s" % (k, remedy.get(k, "?")) for k in kinds)))
+    return 1 if stale else 0
+
+
 def cmd_settings(args):
     """Report, seed, or accept the settings.json convergence.
 
@@ -1261,6 +1358,7 @@ def cmd_settings(args):
     if args.adopt:
         # Lossless: the pre-existing live file is captured verbatim before anything is written.
         settings.adopt_settings()
+        print("%d settings capture(s) moved to done/" % len(retire_captures("settings.json")))
         outcome, detail = settings.converge_settings(dry_run=True)
         print("adopted; now %s — %s" % (outcome, detail))
         return 0
@@ -1317,6 +1415,10 @@ def main(argv=None):
 
     adopt = sub.add_parser("adopt", help="show captured content awaiting classification")
     adopt.set_defaults(func=cmd_adopt)
+
+    pend = sub.add_parser("pending", help="list captures in claude/adopt/ awaiting adoption")
+    pend.add_argument("--machine", help="one machine's queue (default: every machine)")
+    pend.set_defaults(func=cmd_pending)
 
     skills = sub.add_parser("skills", help="reconcile ~/.claude/skills with the table")
     skills.add_argument("--import", dest="seed", action="store_true",

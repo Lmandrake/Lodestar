@@ -8,8 +8,8 @@
     ticket list  [--project P | --all] [--status S] [--type T] [--mine] [--json]
     ticket show  ID
     ticket move  ID proposed|open|active|blocked [--why TEXT]
-    ticket close ID (--said "his words" | --evidence commit:<sha>) [--release]
-    ticket drop  ID --said "his words"        # both name the dependents that lost a blocker
+    ticket close ID [--said "his words" | --evidence commit:<sha>] [--release]   # reason optional (D31)
+    ticket drop  ID [--said "his words"]      # both name the dependents that lost a blocker
     ticket edit  ID [--due D] [--act-by D] [--owner O] [--effort E] [--next|--not-next]
                  [--snooze-until D] [--title T] [--note TEXT] [--check JSON | --gap REASON]
     ticket link  ID (--blocks ID2 | --blocked-by ID2 | --relates ID2 | --ref commit:abc
@@ -19,7 +19,7 @@
     ticket link  ID --blocked-on owner/Repo#12 [--host <private host>]
                  # or an issue URL (github.com / the private host): clears when closed, per gh;
                  # unreachable is "unknown", never "done"
-    ticket link  ID --met "a rainy day" (--said "his words" | --evidence TEXT)   # end a condition
+    ticket link  ID --met "a rainy day" [--said "his words" | --evidence TEXT]   # end a condition
     ticket ready [--project P | --all]           # open, every blocker done; plus stale/dropped
                  # blocks and a "waiting on a condition" section (with ages) for non-ticket blockers
     ticket need  --from P[:ID] --to Q "title" [--type build] [--body TEXT]
@@ -196,7 +196,7 @@ def main(argv=None) -> int:
     g.add_argument("--blocks")
     g.add_argument("--blocked-by", help="a ticket id (a date, issue ref or text is routed to --blocked-on)")
     g.add_argument("--blocked-on", help="free-text condition, 'until YYYY-MM-DD', or an issue ref/URL")
-    g.add_argument("--met", help="end a non-ticket blocker (needs --said or --evidence)")
+    g.add_argument("--met", help="end a non-ticket blocker (--said / --evidence optional)")
     g.add_argument("--relates")
     g.add_argument("--ref")
     g.add_argument("--unblock", help="remove a blocked-by (the answer to a dropped blocker)")

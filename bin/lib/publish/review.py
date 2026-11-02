@@ -7,7 +7,7 @@ real meeting dates, staffing levels). Paraphrase and context cannot be matched b
 `VERDICT: CLEAN`, or an owner ruling over its findings (owner, 2026-10-27).
 
     publish.py review <repo>      # after `scan` passes; writes <publish>/reviews/<repo>/<tree>.json
-    publish.py rule <repo> --owner-said "<his words>"   # writes <tree>.ruling.json beside it
+    publish.py rule <repo> [--owner-said TEXT]          # writes <tree>.ruling.json beside it
 
 A ruling binds tree_hash, manifest_sha256, answer_sha256 and the review id of the receipt it rules
 over, so a rebuild or a new review lapses it. Only a well-formed FINDINGS receipt can be ruled
@@ -311,7 +311,8 @@ def review(repo: str, store: Optional[str] = None, command: Optional[List[str]] 
     return record
 
 
-MIN_RULING_CHARS = 12
+MIN_RULING_CHARS = 12   # retired as a gate (D31); kept for importers
+NO_WORDS = "(no words given; D31 2026-10-31)"
 
 
 def ruling_path(publish: str, repo: str, th: str) -> str:
@@ -350,11 +351,9 @@ def _rulable(rec: Optional[Dict], repo: str, th: str, manifest_sha: str, publish
 
 
 def rule(repo: str, owner_said: str, store: Optional[str] = None) -> Dict:
-    """Record the owner's ruling over the CURRENT FINDINGS receipt of the CURRENT built tree."""
-    words = (owner_said or "").strip()
-    if len(words) < MIN_RULING_CHARS:
-        raise PublishError("--owner-said needs the owner's own words (at least %d characters)"
-                           % MIN_RULING_CHARS)
+    """Record a ruling over the CURRENT FINDINGS receipt of the CURRENT built tree. Words are
+    optional provenance (owner ruling 2026-10-31, docs/DECISIONS.md D31)."""
+    words = (owner_said or "").strip() or NO_WORDS
     publish = private_dir(store)
     man = manifest_mod.load(repo, publish)
     tree = tree_dir(repo)
@@ -394,7 +393,7 @@ def require(repo: str, th: str, manifest_sha: str, publish: str) -> Dict:
     ruling = read_json(ruling_path(publish, repo, th))
     if not ruling:
         raise PublishError("the cold read reported %s finding(s); fix the export and rerun review, "
-                           "or record an owner ruling (`publish.py rule %s --owner-said ...`)"
+                           "or record a ruling (`publish.py rule %s`)"
                            % (rec.get("findings"), repo))
     _rulable(rec, repo, th, manifest_sha, publish)
     for key in ("tree_hash", "manifest_sha256", "answer_sha256", "reviewed_at", "review_id",
@@ -402,8 +401,6 @@ def require(repo: str, th: str, manifest_sha: str, publish: str) -> Dict:
         if ruling.get(key) != rec.get(key):
             raise PublishError("the owner ruling was over a different review (%s differs); the "
                                "ruling lapsed, rule again over the current receipt" % key)
-    if len((ruling.get("owner_said") or "").strip()) < MIN_RULING_CHARS:
-        raise PublishError("the owner ruling carries no words; rule again")
     out = dict(rec)
     out["ruling"] = ruling
     return out

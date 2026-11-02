@@ -7,11 +7,10 @@ keeps resurfacing until explicitly closed, regardless of whether new evidence ha
 recently. A **sighting** (`sticky=False`) is a one-time flagged item, reviewed once and
 closed. Both are rows in one markdown table, `priority/items.md`.
 
-Who may close one (owner delegation, 2026-10-22): Lukas, by his word; or any agent or the
-resolver (`bin/reconcile.py`), as DONE, when the row's attached end-condition check (`Check`
-column, `lib/outcome.py`) is SATISFIED. Nothing may close a beacon by inference: a quiet
-thread, a related item reaching a terminal state, or "probably over" is not a close; ending a
-standing watch for any reason other than a satisfied check is his call.
+Who may close one: any session (owner ruling 2026-10-31, docs/DECISIONS.md D31: no owner-word
+check). The automated resolver (`bin/reconcile.py`) closes one, as DONE, only when the row's
+attached end-condition check (`Check` column, `lib/outcome.py`) is SATISFIED; it never closes by
+inference (a quiet thread, a related item reaching a terminal state, "probably over").
 
 Reading goes through `mdtable.parse`, same as every other registry in this repo. Writing has
 two shapes:
