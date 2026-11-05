@@ -113,6 +113,9 @@ def cmd_verify(args) -> int:
         bad += not rep["passed"]
         print("%s %s: %s, %d hit(s), report %s" % (repo, rep["public_head"][:12],
               "PASS" if rep["passed"] else "FAIL", len(rep["hits"]), rep["path"]))
+        for note in rep.get("history_notes", []):
+            print("  note: older public commit %s has %d hit(s) (a recorded release, already public; not a FAIL)"
+                  % (note["commit"][:12], len(note["hits"])))
     if not repos:
         print("no manifest has a public_remote; nothing to verify")
     return 1 if bad else 0

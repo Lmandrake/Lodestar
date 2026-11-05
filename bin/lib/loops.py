@@ -54,6 +54,12 @@ BACKFILL_FIELDS = TRACKED_FIELDS + ("opened", "actual_spent", "last_touch", "dea
 #: Events that never write the loop file. A rebuild that let them create a loop or move
 #: `last_touch` would disagree with the real file (measured 2026-10-25: 8 loops, via handoffs).
 FILE_SILENT_EVENTS = ("handoff",)
+#: Events whose writer stamps `last_touch` in the loop file (touch.py, close.py, and the sense and
+#: shadow runners' `upsert`). Every other type (lifecycle, dump-monitor, skill-prune, tender, an
+#: unknown one) is journal-only: its writer never opens the file, so letting it move `last_touch`
+#: makes a rebuild disagree with the real file (measured 2026-11-04: 9 files, via lifecycle and
+#: dump-monitor events). They still open the loop, as before.
+FILE_STAMPING_EVENTS = ("open", "touch", "progress", "park", "resume", "close", "run")
 
 
 class InvalidLoop(Exception):
@@ -303,7 +309,7 @@ def derive(events: Iterable[Dict[str, Any]]) -> Dict[str, Dict[str, str]]:
         if event.get("state") in STATES:
             fields["state"] = str(event["state"])
 
-        if timestamp:
+        if timestamp and kind in FILE_STAMPING_EVENTS:
             stamp = "%s/%s" % (event.get("machine", "?"), event.get("runtime", "?"))
             # Must match the format `upsert` writes, offset included, or a --rebuild
             # silently reformats every loop file it touches and the board churns.

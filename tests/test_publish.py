@@ -542,6 +542,120 @@ class Allowances(PublishBase):
         self.assertEqual({h["class"] for h in self.scan()["hits"]}, {"term"})
 
 
+class VerifyHistory(PublishBase):
+    """D33: verify fails on the public tip only; older public trees' hits are notes."""
+
+    def _release_with(self, rel, text):
+        self.write(rel, text)
+        self.commit_push()
+        build_mod.build("Demo")
+        sha = common.sha256_file(os.path.join(common.tree_dir("Demo"), rel))
+        self.manifest(remote=self.public, extra=(
+            '\n[[allow]]\npath = "%s"\nsha256 = "%s"\nclass = "email"\n'
+            'reason = "synthetic fixture"\n' % (rel, sha)))
+        self.full_release()
+
+    def _second_release_removing(self, rel):
+        os.remove(os.path.join(self.repo, rel))
+        self.commit_push()
+        self.manifest(remote=self.public)        # its allowance is gone with it
+        self.full_release()
+
+    def test_hit_in_tip_fails_verify(self):
+        self.full_release()
+        stage = common.staging_dir("Demo")
+        with open(os.path.join(stage, "leak.md"), "w") as fh:
+            fh.write(CANARIES["marker"] + "\n")
+        env = release_mod._clean_env()
+        git(stage, "add", "leak.md", env=env)
+        git(stage, "commit", "-q", "-m", "sneak", env=env)
+        git(stage, "push", "-q", "--no-verify", "origin", "HEAD:refs/heads/main", env=env)
+        rep = release_mod.verify("Demo")
+        self.assertFalse(rep["passed"])
+        self.assertIn("marker", {h["class"] for h in rep["hits"]})
+
+    def test_lapsed_allowance_against_tip_still_fails(self):
+        self.full_release()
+        self.manifest(remote=self.public, extra=(
+            '\n[[allow]]\npath = "docs/gone.md"\nsha256 = "%s"\nclass = "email"\n'
+            'reason = "stale"\n' % ("0" * 64)))
+        self.assertFalse(release_mod.verify("Demo")["passed"])
+
+    def _public_head(self):
+        return git(self.public, "rev-parse", "main").strip()
+
+    def test_older_tree_hit_is_a_note_not_a_fail(self):
+        self._release_with("docs/a.md", CANARIES["email"] + "\n")
+        first = self._public_head()
+        self._second_release_removing("docs/a.md")
+        rep = release_mod.verify("Demo")
+        self.assertTrue(rep["passed"], rep["hits"])
+        self.assertEqual(rep["hits"], [])
+        self.assertEqual([n["commit"] for n in rep["history_notes"]], [first])
+        self.assertEqual(rep["history_notes"][0]["tree"],
+                         git(self.public, "rev-parse", first + "^{tree}").strip())
+        self.assertEqual({h["class"] for h in rep["history_notes"][0]["hits"]}, {"email"})
+        with open(rep["path"]) as fh:
+            self.assertEqual(json.load(fh)["history_notes"], rep["history_notes"])
+
+    def test_unrecorded_intermediate_leak_still_fails_verify(self):
+        self.full_release()
+        stage = common.staging_dir("Demo")
+        env = release_mod._clean_env()
+        path = os.path.join(stage, "leak.md")
+        with open(path, "w") as fh:
+            fh.write(CANARIES["marker"] + "\n")
+        git(stage, "add", "leak.md", env=env)
+        git(stage, "commit", "-q", "-m", "add document", env=env)
+        leaked = git(stage, "rev-parse", "HEAD").strip()
+        os.remove(path)
+        git(stage, "commit", "-qam", "remove document", env=env)
+        git(stage, "push", "-q", "--no-verify", "origin", "HEAD:refs/heads/main", env=env)
+        rep = release_mod.verify("Demo")
+        self.assertFalse(rep["passed"])
+        self.assertEqual(rep["commit"], leaked)
+        self.assertIn("marker", {h["class"] for h in rep["hits"]})
+
+    def test_older_tree_with_only_lapsed_allowances_passes_without_notes(self):
+        self.full_release()                      # clean tree, no docs/a.md
+        self._release_with("docs/a.md", CANARIES["email"] + "\n")
+        rep = release_mod.verify("Demo")
+        self.assertTrue(rep["passed"], (rep["hits"], rep["lapsed_allowances"]))
+        self.assertEqual(rep["history_notes"], [])
+
+    def test_older_tree_lapsed_allowances_do_not_fail(self):
+        # The observed case: an allowance rebound to new content no longer covers the old
+        # released content, and the rebound one lapses against the old tree.
+        self._release_with("docs/a.md", CANARIES["email"] + "\n")
+        self._release_with("docs/a.md", CANARIES["email"] + "\nreworded\n")
+        rep = release_mod.verify("Demo")
+        self.assertTrue(rep["passed"], (rep["hits"], rep["lapsed_allowances"]))
+        self.assertEqual(rep["lapsed_allowances"], [])
+        self.assertEqual(len(rep["allowed"]), 1)
+        self.assertEqual(len(rep["history_notes"]), 1)
+
+    def test_hook_still_fails_older_tree_hits(self):
+        self._release_with("docs/a.md", CANARIES["email"] + "\n")
+        publish = common.private_dir()
+        self.manifest(remote=self.public)
+        man = build_mod.manifest_mod.load("Demo", publish)
+        gitdir = os.path.join(common.staging_dir("Demo"), ".git")
+        stage = common.staging_dir("Demo")
+        os.remove(os.path.join(stage, "docs/a.md"))
+        env = release_mod._clean_env()
+        git(stage, "commit", "-qam", "rm", env=env)
+        head = git(stage, "rev-parse", "HEAD").strip()
+        old = git(stage, "rev-parse", "HEAD~1").strip()
+        rep = release_mod.check_commits("Demo", gitdir, head, release_mod.ZERO, man,
+                                        scan_mod.load_lists(publish), [])
+        self.assertFalse(rep["passed"])
+        self.assertEqual(rep["commit"], old)
+        self.assertIn("email", {h["class"] for h in rep["hits"]})
+        tip = release_mod.check_commits("Demo", gitdir, head, old, man,
+                                        scan_mod.load_lists(publish), [])
+        self.assertTrue(tip["passed"], tip["hits"])
+
+
 class Refusals(PublishBase):
     def test_dirty_source_refused(self):
         self.write("README.md", "# changed\n")

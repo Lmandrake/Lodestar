@@ -45,7 +45,7 @@ import subprocess
 import time
 from typing import Any, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
-from . import mdtable, paths
+from . import mdtable, paths, plans, tombstones
 
 # A repo that failed is retried at most this often. Written when the sweep ran every ~127 s,
 # when without it a dead remote would be dialled ~28 times an hour; still the right floor.
@@ -563,14 +563,57 @@ def adopt(entry, url: str, where: Optional[str], dry_run: bool, entries=(),
                                      "as its path on %s" % (target, where))
 
 
+#: Plan kinds whose approval means "this id must NOT be checked out here". Mirrors
+#: `lifecycle.EVICTING_KINDS`; spelled here so this module does not import the CLI.
+EVICTING_PLAN_KINDS = ("retire", "quarantine", "purge")
+
+
+def retired_reason(entry, machine_key: Optional[str] = None,
+                   tombstones_path: Optional[str] = None,
+                   plans_path: Optional[str] = None,
+                   approvals_path: Optional[str] = None) -> Optional[str]:
+    """Why `entry` must never be cloned or adopted here, or None when it may be.
+
+    RETIRED_REPOS_SYNC_RECLONE (2026-10-27, again 2026-11-04): a converged `retire` moved the
+    checkout to quarantine, the row's Send/Receive were still on, the path read as absent, and
+    the next sweep cloned it straight back. Absence of a retired checkout is the goal, not a
+    gap to fill. Three independent signals, any one sufficient: the row says `retired`; the id
+    carries a tombstone (survives the row being edited back); an approved evicting plan names
+    this machine (covers the window before either is written). An unreadable store is a
+    refusal, never permission.
+    """
+    state = (getattr(entry, "state", "") or "").strip().lower()
+    if state == "retired":
+        return "registry row is State: retired"
+    repo_id = getattr(entry, "repo_id", "") or ""
+    if not repo_id:
+        return None
+    try:
+        if tombstones.is_retired(repo_id, tombstones_path):
+            return "id %s carries a tombstone in sync/tombstones.md" % repo_id
+        store = plans.load_plans(plans_path)
+        approvals = plans.load_approvals(approvals_path)
+    except Exception as error:  # pragma: no cover - defensive
+        return "could not read tombstones/plans (%s); refusing rather than guessing" % error
+    for plan in store.values():
+        if plan.repo_id != repo_id or plan.kind not in EVICTING_PLAN_KINDS:
+            continue
+        scoped = (not plan.machines or plan.machines == ("all",)
+                  or (machine_key and machine_key in plan.machines))
+        if scoped and plans.approved(plan, approvals)[0]:
+            return "approved %s plan %s evicts it" % (plan.kind, plan.plan_id)
+    return None
+
+
 def clone_missing(names: List[str], entries, mapping: Dict[str, str],
                   dry_run: bool = False, now: Optional[float] = None,
                   attempts_path: Optional[str] = None,
                   limit: int = MAX_CLONES_PER_SWEEP,
                   where: Optional[str] = None,
                   root: Optional[str] = None,
-                  registry_path: Optional[str] = None) -> List[Attempt]:
-    """Clone up to `limit` of `names`, honouring participation and backoff.
+                  registry_path: Optional[str] = None,
+                  machine_key: Optional[str] = None) -> List[Attempt]:
+    """Clone up to `limit` of `names`, honouring participation, retirement and backoff.
 
     `names` are repos a skill row needs. Anything not participating in the registry is
     reported as refused rather than silently skipped — a skill pointing at an unregistered
@@ -592,6 +635,12 @@ def clone_missing(names: List[str], entries, mapping: Dict[str, str],
         destination = os.path.expanduser(entry.path)
         if os.path.exists(destination):
             continue  # another sweep, or a human, got there first
+        # 🔴 BEFORE adopt as well as clone: adopting a retired repo's stray copy is the same
+        # resurrection by another route.
+        retired = retired_reason(entry, machine_key=machine_key)
+        if retired is not None:
+            results.append(Attempt(name, False, "NOT cloned — retired: %s" % retired))
+            continue
         url, source = url_for(name, mapping)
         if inventory is None:
             inventory = checkouts(root)

@@ -1103,6 +1103,18 @@ def clone_step(entries, dry_run: bool, where: Optional[str] = None) -> Optional[
     if not absent:
         return None
 
+    # 🔴 A retired id is absent ON PURPOSE (RETIRED_REPOS_SYNC_RECLONE). Dropped here, before
+    # mid-rename and adopt, so it is neither cloned nor reported as missing; `clone_missing`
+    # repeats the check for its other caller (claudeconf's skill clones).
+    try:
+        here = machine.key()
+    except Exception:
+        here = None
+    absent = [entry for entry in absent
+              if skillclone.retired_reason(entry, machine_key=here) is None]
+    if not absent:
+        return None
+
     # 🔴 A row whose PREVIOUS identity is still checked out here is mid-rename, not absent.
     # Cloning it would produce a second checkout of one repo — the RimMaster/RimMandrake
     # failure in docs/SYNC_AGENT.md — because absence is computed from the row's Path while
@@ -1131,7 +1143,7 @@ def clone_step(entries, dry_run: bool, where: Optional[str] = None) -> Optional[
     try:
         mapping = skillclone.read_remotes()
         attempts = skillclone.clone_missing(missing, entries, mapping, dry_run=dry_run,
-                                            where=where)
+                                            where=where, machine_key=here)
     except Exception as error:  # cloning must never cost the sweep
         return Result(name, os.path.expanduser("~/dev"), FLAGGED,
                       "clone step failed: %s" % error, [])

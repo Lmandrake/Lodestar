@@ -23,7 +23,20 @@ from typing import Dict, Iterable, List, Optional, Set
 
 from . import mdtable, paths
 
-WAYPOINT = os.path.expanduser("~/dev/Waypoint/waypoint")
+def waypoint_data_dir(home: Optional[str] = None) -> str:
+    """Waypoint's data directory, in ONE place: its tables (`waypoints.md`, `launches.md`) and a
+    `waypoint` symlink to the CLI, which `waypoint install` creates there.
+
+    Waypoint's own rule (MandrakeWorkflows/tools/waypoint, since 2026-11-02): `$WAYPOINT_DATA`,
+    else `~/.config/waypoint`. On the owner's Macs that is a symlink into the private store's waypoint folder.
+    A `home` override (tests) ignores the environment so a fixture never reads the live tables.
+    """
+    if home is None and os.environ.get("WAYPOINT_DATA"):
+        return os.path.expanduser(os.environ["WAYPOINT_DATA"])
+    return os.path.join(home or os.path.expanduser("~"), ".config", "waypoint")
+
+
+WAYPOINT = os.path.join(waypoint_data_dir(), "waypoint")
 
 _key_cache = None  # type: Optional[str]
 

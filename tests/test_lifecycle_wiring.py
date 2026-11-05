@@ -24,7 +24,7 @@ import unittest
 
 import lifecycle
 import sync
-from lib import plans, registry, satellites, skillclone
+from lib import machine, plans, registry, satellites, skillclone
 
 
 def source_without_comments(obj):
@@ -70,7 +70,7 @@ class TestRenameScansAllFourSatelliteKinds(unittest.TestCase):
 
         self.assertIn("satellites.default_waypoint_root()", source)
         self.assertNotIn('"Waypoint"', source)
-        self.assertTrue(satellites.default_waypoint_root().endswith(os.path.join("dev", "Waypoint")))
+        self.assertEqual(satellites.default_waypoint_root(), machine.waypoint_data_dir())
 
     def test_find_still_has_NO_defaults_so_a_fixture_can_opt_out(self):
         """The reason the roots are passed explicitly instead of defaulted: `None` must keep
@@ -155,7 +155,8 @@ class TestCloneStepRefusesAMidRenameRow(unittest.TestCase):
         skillclone.checkouts = self.old_checkouts
 
     def test_a_row_whose_former_identity_is_present_is_not_cloned(self):
-        entry = an_entry(path=os.path.join(self.tmp, "DispatchOpenCode"))
+        entry = an_entry(path=os.path.join(self.tmp, "DispatchOpenCode"),
+                         repo_id="midrename-fixture")  # live opencodecli is retired
         skillclone.checkouts = lambda root=None: [
             (os.path.join(self.tmp, "OpenCodeCLI"),
              "git@github.com:Lmandrake/OpenCodeCLI.git")]
@@ -170,7 +171,8 @@ class TestCloneStepRefusesAMidRenameRow(unittest.TestCase):
                       "the report must name the tool that completes the rename")
 
     def test_the_mid_rename_row_is_flagged_rather_than_reported_as_clean(self):
-        entry = an_entry(path=os.path.join(self.tmp, "DispatchOpenCode"))
+        entry = an_entry(path=os.path.join(self.tmp, "DispatchOpenCode"),
+                         repo_id="midrename-fixture")  # live opencodecli is retired
         skillclone.checkouts = lambda root=None: [
             (os.path.join(self.tmp, "OpenCodeCLI"), "git@github.com:Lmandrake/OpenCodeCLI.git")]
         result = sync.clone_step([entry], dry_run=True, where="desktop")

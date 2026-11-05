@@ -357,6 +357,17 @@ class TestDeriveHonoursJournaledState(unittest.TestCase):
         self.assertEqual(derived["x"]["last_touch"], "2026-08-28T09:00-07:00 desktop/cc")
         self.assertNotIn("ghost", derived)
 
+    def test_journal_only_events_move_no_last_touch(self):
+        derived = loops.derive([
+            {"ts": "2026-08-28T09:00:00-07:00", "loop": "x", "event": "open",
+             "machine": "desktop", "runtime": "cc"},
+            {"ts": "2026-08-29T09:00:00-07:00", "loop": "x", "event": "lifecycle",
+             "machine": "laptop", "runtime": "shell"},
+            {"ts": "2026-08-30T06:35:00-07:00", "loop": "x", "event": "dump-monitor",
+             "machine": "desktop", "runtime": "monitor"},
+        ])
+        self.assertEqual(derived["x"]["last_touch"], "2026-08-28T09:00-07:00 desktop/cc")
+
     def test_backfill_sets_fields_without_touching_state_or_last_touch(self):
         derived = loops.derive([
             {"ts": "2026-08-28T09:00:00-07:00", "loop": "x", "event": "open",

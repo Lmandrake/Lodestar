@@ -89,6 +89,10 @@ LOOP = "repo-lifecycle"
 #: run did the work, and so nothing re-records a completion that is already on disk.
 COMPLETE = "complete"
 
+#: An evicting plan recorded as converged whose checkout is back on disk. Non-zero, never
+#: recorded as a completion (that would overwrite the evidence that it once converged).
+REAPPEARED = "reappeared"
+
 #: Kinds whose plan `new` cell is NOT a filesystem path, so `tilde()` must never touch it.
 #: `rehome` carries a git URL and `purge` carries a hosted-repository coordinate. CLAUDE.md
 #: §7 records what `tilde()` did to the first of those: `os.path.abspath` resolved the URL
@@ -107,7 +111,7 @@ EVICTING_KINDS = ("retire", "quarantine", "purge")
 #: (LESSONS.md has the measured case); `disarmed` is here because an approved purge that has
 #: not executed is an open obligation. A preview (`would-*`) is NOT here — a dry run reporting
 #: a fault would make the sweep flag on a run that asked nothing of the world.
-NONZERO_STATUSES = ("stop", "refused", "partial", "disarmed")
+NONZERO_STATUSES = ("stop", "refused", "partial", "disarmed", REAPPEARED)
 
 #: Where a quarantined checkout is held. Outside the repo and outside the managed working
 #: area, so the sweep never sees it and it cannot be committed anywhere.
@@ -631,6 +635,21 @@ def _converge_one(plan, dry_run, armed=False, runner=None):
     except completions.Unreadable as exc:
         return "stop", ["REFUSED: %s" % exc]
     done, why = completions.retires(recorded, fingerprint, row is not None)
+    if done and plan.kind in EVICTING_KINDS and row is not None:
+        # 🔴 RETIRED_REPOS_SYNC_RECLONE: "converged" is a claim about the disk, so re-check
+        # it. A checkout back at the evicted path means the eviction was undone (the sweep
+        # re-cloned it); reporting `complete` hid that for a week. Never auto-act on it: the
+        # copy may hold new work. Flag every sweep until a human reopens.
+        evicted = local(plan.old) or os.path.expanduser(row.path)
+        if os.path.lexists(evicted):
+            return REAPPEARED, [
+                "REAPPEARED: %s was %s here, but %s exists again. Nothing was moved. Check it "
+                "holds nothing new, then `bin/lifecycle.py reopen %s && bin/lifecycle.py "
+                "converge` re-quarantines it (to a fresh holding dir if the first is taken)."
+                % (plan.plan_id, recorded.status, evicted, plan.plan_id)]
+        if plan.kind in ("retire", "purge") and \
+                (row.state or "").strip().lower() != registry.RETIRED:
+            done, why = False, "converged earlier, but the registry row is not State: retired"
     if done:
         return COMPLETE, ["%s — nothing re-evaluated. `lifecycle.py reopen %s` un-retires it."
                           % (why, plan.plan_id)]
@@ -1438,11 +1457,27 @@ def _absent_as_evicted(plan, row, repo_path, dry_run, lines):
 
 
 def _do_quarantine(plan, row, repo_path, fingerprint, dry_run, lines):
+    # 🔴 A retire DECLARES `State: retired` first, exactly as a purge does (see
+    # `_purge_declaration_step`): a retired id whose row still participates is re-cloned by
+    # the next sweep (RETIRED_REPOS_SYNC_RECLONE). Skipped with no row (nothing to write).
+    if plan.kind == "retire" and row is not None:
+        ok, lines = _purge_declaration_step(plan, row, dry_run, lines)
+        if not ok:
+            return "refused", lines
+
     already = _absent_as_evicted(plan, row, repo_path, dry_run, lines)
     if already is not None:
         return already
 
-    holding = relocate.quarantine(repo_path, HOLDING_ROOT, dry_run=True)
+    holding_root = HOLDING_ROOT
+    holding = relocate.quarantine(repo_path, holding_root, dry_run=True)
+    if not holding["ok"] and _quarantined_by_this_plan(plan, holding.get("holding_path", "")):
+        # Re-retiring a reappeared duplicate (reopen + converge): the first quarantine is
+        # this plan's own and stays untouched; the duplicate goes beside it, never merged.
+        holding_root = os.path.join(HOLDING_ROOT, "reappeared", plan.plan_id)
+        lines.append("holding %s is this plan's earlier quarantine; the reappeared copy goes "
+                     "to %s" % (holding["holding_path"], holding_root))
+        holding = relocate.quarantine(repo_path, holding_root, dry_run=True)
     if not holding["ok"]:
         return "refused", lines + [holding["reason"]]
 
@@ -1456,10 +1491,13 @@ def _do_quarantine(plan, row, repo_path, fingerprint, dry_run, lines):
         old_path=repo_path, new_path="", holding_path=holding["holding_path"],
         fingerprint=fingerprint, started_at=clock.now()))
 
-    result = relocate.quarantine(repo_path, HOLDING_ROOT)
+    result = relocate.quarantine(repo_path, holding_root)
     lines.append(result["reason"])
     if not result["ok"]:
         return "refused", lines
+    if os.path.lexists(repo_path):
+        # Verify, do not trust the mover: `converged` must mean the path is gone.
+        return "partial", lines + ["PARTIAL: %s still exists after the move" % repo_path]
 
     if plan.kind == "retire":
         tombstones.append(plan.repo_id, reason=plan.note or "retired by plan %s"
@@ -1468,6 +1506,18 @@ def _do_quarantine(plan, row, repo_path, fingerprint, dry_run, lines):
 
     transitions.finish(plan.plan_id)
     return "converged", lines
+
+
+def _quarantined_by_this_plan(plan, holding_path):
+    """True when `holding_path` is where THIS plan's own finished transition put the repo."""
+    if not holding_path:
+        return False
+    try:
+        mine = transitions.load().get(plan.plan_id)
+    except transitions.Unreadable:
+        return False
+    return bool(mine and mine.finished_at and mine.holding_path
+                and os.path.realpath(mine.holding_path) == os.path.realpath(holding_path))
 
 
 def status_changed(plan_id, status, state_path=None):
@@ -1545,7 +1595,7 @@ def cmd_converge(args):
         # re-recorded: the record it was read from is already on disk and rewriting it would
         # move `at` on every sweep for no new fact.
         if not args.dry_run:
-            if status != COMPLETE:
+            if status not in (COMPLETE, REAPPEARED):
                 completions.record(plan.plan_id, plan.repo_id, plans.fingerprint(plan), status)
             if status_changed(plan.plan_id, status):
                 journal.append(LOOP, "lifecycle",

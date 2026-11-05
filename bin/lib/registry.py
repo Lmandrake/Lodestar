@@ -206,7 +206,10 @@ def _here(registry_path: Optional[str], role: Optional[str],
 def participating(registry_path: Optional[str] = None, role: Optional[str] = None,
                   key: Optional[str] = None) -> List[Entry]:
     rows, role, key = _here(registry_path, role, key)
-    return [entry for entry in rows if entry.sync and on_machine(entry, role, key)]
+    # A `retired` row never participates, whatever its Send/Receive cells still say:
+    # RETIRED_REPOS_SYNC_RECLONE was retired rows left `on/on` being re-cloned by the sweep.
+    return [entry for entry in rows if entry.sync and on_machine(entry, role, key)
+            and (entry.state or "").strip().lower() != RETIRED]
 
 
 def excluded(registry_path: Optional[str] = None, role: Optional[str] = None,

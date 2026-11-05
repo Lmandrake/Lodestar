@@ -146,14 +146,14 @@ def is_removal(sat: Satellite) -> bool:
 
 
 def default_waypoint_root(home: Optional[str] = None) -> str:
-    """`~/dev/Waypoint`, in ONE place.
+    """Waypoint's data directory (tables + CLI link), in ONE place: `machine.waypoint_data_dir`.
 
     Two production callers need it — `removals()` resolves it for itself and
     `lifecycle._do_rename` passes it to `find()` — and this repo has already paid for the
     alternative: five private `_escape` copies are why `mdtable`'s reader drifted from its
     writers for months. A second literal here would be the same shape.
     """
-    return os.path.join(home or os.path.expanduser("~"), "dev", "Waypoint")
+    return machine.waypoint_data_dir(home)
 
 
 def project_memory_name(repo_path: str) -> str:

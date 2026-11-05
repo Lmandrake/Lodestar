@@ -165,7 +165,7 @@ class RenameSatelliteScanTest(ExecutorTestCase):
             self.assertIn(name, passed, "%s was not passed, so that kind is found by nothing"
                                         % name)
             self.assertTrue(passed[name], "%s was passed empty: %r" % (name, passed[name]))
-        self.assertTrue(passed["waypoint_root"].endswith(os.path.join("dev", "Waypoint")))
+        self.assertEqual(passed["waypoint_root"], satellites.default_waypoint_root())
 
     def test_a_shortcut_row_is_FOLLOWED_end_to_end_and_the_rename_converges(self):
         """The composition ruling 1 exists for: census -> followable -> `follow` -> converged.
@@ -803,6 +803,17 @@ class EvictionAbsenceTest(ExecutorTestCase):
     itself declares**; anywhere else it stays a refusal, because that is a typo until proven
     otherwise.
     """
+
+    def setUp(self):
+        super().setUp()
+        # A retire now writes `State: retired` (RETIRED_REPOS_SYNC_RECLONE), so give it a
+        # temp registry holding the row — never the live one.
+        self.registry_file = os.path.join(self.tmp, "registry.md")
+        with open(self.registry_file, "w", encoding="utf-8") as fh:
+            fh.write("| Name | Path | Branch | Send | Receive | Machines | Id | Former | Remote "
+                     "| State | Mirror | Notes |\n|-|-|-|-|-|-|-|-|-|-|-|-|\n"
+                     "| Throwaway | ~/x | main | on | on |  | throwaway |  |  | active |  |  |\n")
+        self._patch(paths, "registry_file", lambda: self.registry_file)
 
     def row_for(self, path):
         from lib import registry

@@ -112,9 +112,14 @@ def diff(repo: str, store: Optional[str] = None) -> Dict:
 # ---- the check the pre-push hook runs ---------------------------------------------------------
 
 def check_commits(repo: str, gitdir: str, local: str, remote_sha: str, man, lists,
-                  forbidden_shas: List[str]) -> Dict:
+                  forbidden_shas: List[str], released: Optional[set] = None) -> Dict:
     """Every commit being pushed: noreply author+committer, message free of hits and private
-    shas; the tip's tree scanned in full. Returns the scan report of the tip."""
+    shas; the tip's tree scanned in full. Returns the scan report of the tip.
+
+    `released` (verify, D33): exact commit shas the pipeline recorded as released. A hit in an
+    older tree of one of THOSE commits is reported under `history_notes` instead of failing; a
+    hit in any other older commit (e.g. hand-pushed with --no-verify) still fails, and the
+    tip's verdict is untouched."""
     rng = local if remote_sha in ("", ZERO) else "%s..%s" % (remote_sha, local)
     commits = _sgit(gitdir, "rev-list", rng).split()
     if not commits:
@@ -137,6 +142,7 @@ def check_commits(repo: str, gitdir: str, local: str, remote_sha: str, man, list
     # Older trees fail on hits only (the manifest's allowances describe the tip, so they may
     # lapse there legitimately); the tip's report is returned whole.
     by_tree: Dict[str, Dict] = {}
+    notes: List[Dict] = []
     for sha in reversed(commits):            # oldest first
         tree = _sgit(gitdir, "rev-parse", "%s^{tree}" % sha).strip()
         if tree not in by_tree:
@@ -147,8 +153,12 @@ def check_commits(repo: str, gitdir: str, local: str, remote_sha: str, man, list
                 by_tree[tree] = scan_mod.scan_tree(dest, man, lists)
         rep = dict(by_tree[tree], commit=sha)
         if sha != commits[0] and rep["hits"]:
-            rep["passed"] = False
-            return rep
+            if released is None or sha not in released:
+                rep["passed"] = False
+                return rep
+            notes.append({"commit": sha, "tree": tree, "hits": rep["hits"]})
+    if released is not None:
+        rep["history_notes"] = notes
     return rep
 
 
@@ -376,7 +386,10 @@ def _releases(publish: str, repo: str) -> List[Dict]:
 # ---- verify -----------------------------------------------------------------------------------
 
 def verify(repo: str, store: Optional[str] = None) -> Dict:
-    """Clone the public remote fresh, check every commit's identity, scan HEAD's tree."""
+    """Clone the public remote fresh, check every commit's identity and message, scan HEAD's
+    tree in full. Older public trees are already public and unchanged, and their allowances
+    lapse against today's manifest, so a recorded release's older hits are notes
+    (`history_notes`), not a FAIL; an unrecorded older commit with a hit still fails (D33)."""
     publish = private_dir(store)
     man = manifest_mod.load(repo, publish)
     if not man.public_remote:
@@ -390,7 +403,9 @@ def verify(repo: str, store: Optional[str] = None) -> Dict:
             raise PublishError("clone of %s failed: %s" % (man.public_remote, out.stderr[-300:]))
         head = _sgit(clone, "rev-parse", "HEAD").strip()
         report = check_commits(repo, os.path.join(clone, ".git"), head, ZERO, man, lists,
-                               _private_shas(repo))
+                               _private_shas(repo),
+                               released={r.get("public_commit") for r in _releases(publish, repo)
+                                         if r.get("pushed") and r.get("public_commit")})
     report["public_head"] = head
     report["path"] = scan_mod.write_report(publish, report, prefix="verify-")
     return report
