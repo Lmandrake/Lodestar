@@ -1,13 +1,23 @@
 """The append-only event journal.
 
-Every change to the board is also written here as its own uniquely-named file
+Every change is written here as its own uniquely-named file
 (`journal/YYYY-MM-DD/<epoch>-<uuid>.json`). That is what makes two machines safe on one
 repo: concurrent writes create different files, so git merges them without a conflict
 instead of fighting over one log (decision D5 in docs/DECISIONS.md).
 
-Loop *state* is re-derivable from this journal. Loop *prose* is not — the freeform body of
-a loop file never enters the journal, so `board.py --rebuild` restores frontmatter and
-preserves bodies rather than claiming to reconstruct them (decision D-F).
+🔴 **THE WIRE KEY IS `"loop"` AND IT IS NEVER RENAMED.** The loop concept was retired
+2026-11-10 (`design/plans/2026-11-10-retire-loops.md`) and this module's first parameter is
+now called `subject`, but the JSON key every event carries stays `"loop"`. 1,313 events
+written before the cutover address that key; renaming it would leave every one of them
+unreadable to the code that reads them, which is the opposite of the forward-only cutover the
+owner ruled ("as long as no modern data will be harmed in terms of pointing"). `loop=` also
+stays accepted as a keyword alias. A SUBJECT is whatever the event is about: before
+2026-11-10 that was always a loop id; after, it is a project id, a ticket id, or a subsystem
+name (`airlock-shadow`, `cowork-sensing`, `repo-lifecycle`, `desktop-remote-access`,
+`lodestar`). Those literals are also never changed, for the same reason.
+
+The journal outlived the loop because it was never really about loops: it is a durable,
+synced, append-only record of what happened, addressed by a string.
 
 Reads are deliberately forgiving: one corrupt event file must never stop a rebuild, so
 `load` collects problems and carries on.
@@ -62,14 +72,24 @@ class UnknownEvent(Exception):
 
 
 def append(
-    loop: str,
-    event: str,
+    subject: Optional[str] = None,
+    event: str = "",
     note: Optional[str] = None,
     tokens: Optional[int] = None,
     extra: Optional[Dict[str, Any]] = None,
     machines_path: Optional[str] = None,
+    loop: Optional[str] = None,
 ) -> str:
-    """Write one event file and return its path."""
+    """Write one event file and return its path.
+
+    `subject` is what the event is about — a project id, a ticket id or a subsystem name. It
+    is stored under the wire key `"loop"`, which is frozen (see the module docstring).
+    `loop=` is accepted as a keyword alias for callers written before 2026-11-10.
+    """
+    if subject is None:
+        subject = loop
+    if subject is None:
+        raise TypeError("append() needs a subject (the thing the event is about)")
     if event not in EVENT_TYPES:
         raise UnknownEvent(
             "unknown event type %r; expected one of %s" % (event, ", ".join(EVENT_TYPES))
@@ -82,7 +102,8 @@ def append(
         # back to back could replay in either order and `derive` would produce the wrong
         # final state. Still valid ISO 8601.
         "ts": clock.now(timespec="microseconds"),
-        "loop": loop,
+        # 🔴 Frozen wire key. See the module docstring: 1,313 pre-cutover events address it.
+        "loop": subject,
         "event": event,
         "machine": machine.role(machines_path),
         "runtime": machine.runtime(),
@@ -155,6 +176,11 @@ def load() -> Tuple[List[Dict[str, Any]], List[Tuple[str, str]]]:
     return events, problems
 
 
-def for_loop(loop: str) -> List[Dict[str, Any]]:
+def for_subject(subject: str) -> List[Dict[str, Any]]:
+    """Every event about one subject, oldest first."""
     events, _ = load()
-    return [event for event in events if event.get("loop") == loop]
+    return [event for event in events if event.get("loop") == subject]
+
+
+#: Pre-cutover name, kept so no caller breaks (the loop retirement, 2026-11-10).
+for_loop = for_subject

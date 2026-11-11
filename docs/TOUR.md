@@ -240,28 +240,17 @@ takes roles or keys; and a dangling row is a visible warning, never a quiet abse
 
 ---
 
-## 4. Board, loops, tickets and the handoff ritual
+## 4. Projects, tickets and the handoff ritual
 
-### The board
+### The loop, and what replaced it
 
-Work is tracked as **loops**: one markdown file each, with typed frontmatter (state, deadline,
-time-to-close estimate) in `loops/`, and an append-only **journal** of events in `journal/`.
-`BOARD.md` is rendered from them by `bin/board.py`. Because the journal is append-only and the
-files are per-loop, two machines almost never conflict, and git merge is the sync. Every loop must
-carry a time-to-close estimate, and there is no cap on active loops. The tour prints the board:
-
-```
-    ## 🔴 Active — 2
-    | `demo-notebook-rename` | Rename Fieldnotes to Notebook on every machine | ... | 30m |
-    | `demo-sync-health`     | Keep the three demo machines converged         | ... | 1h  |
-    ## 🟢 Background — 1
-    | `demo-skill-cleanup`   | Remove the retired-skill row once nothing needs it | 15m |
-```
-
-```sh
-python3 bin/board.py --check      # is BOARD.md current?
-python3 bin/board.py --rebuild    # re-derive loop state from the journal
-```
+**The "loop" concept was retired 2026-11-10 (D34, `docs/DECISIONS.md`).** This section used to
+describe loops as one markdown file each in `loops/`, rendered into `BOARD.md` by `bin/board.py`.
+Both `board.py` and the render are gone; `BOARD.md` is now a tombstone file that nothing
+regenerates, and `bin/board.py --check` / `--rebuild` no longer exist — do not run them. A thread
+of work is now a **project** (a row in `sync/registry.md`) plus its **tickets** (below). "What
+should I do now" is `bin/orders.py`. An append-only **journal** of events in `journal/` survives
+unchanged.
 
 ### Tickets
 

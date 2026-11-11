@@ -352,46 +352,32 @@ class TestGuards(SweepTest):
         self.assertIn("upstream", self.detail("alpha"))
 
 
-class TestSoftLock(SweepTest):
-    def test_another_machines_open_loop_blocks_the_commit(self):
+class TestRetiredSoftLock(SweepTest):
+    """The advisory soft-lock was retired 2026-11-10 with the loop concept.
+
+    Four tests here asserted that another machine's recent claim on an open loop bound to a
+    repo made the sweep skip the commit (and that our own claim, a stale claim and a closed
+    loop did not). The loop WAS the lock. `soft_lock_owner` is a stub returning None, and the
+    replacement is ticket `LODESTAR_REPLACE_SWEEP_SOFT_LOCK_LOOP_WAS_THE_LOCK`.
+
+    These two pin the new behaviour so the regression is a decision in the suite rather than a
+    silence: a loop file on disk no longer influences the sweep at all, and the sweep still
+    commits. When the ticket is built, these are what it replaces.
+    """
+
+    def test_another_machines_loop_no_longer_blocks_the_commit(self):
         path = self.make_repo("alpha")
         self.write(path, "notes.md", "work\n", age_seconds=3600)
         self.add_loop("alpha-loop", path, "otherbox/cc", minutes_ago=1)
         self.register_all()
         self.run_sweep()
-        self.assertEqual(self.outcome("alpha"), sync_cmd.SKIPPED)
-        self.assertIn("soft-lock", self.detail("alpha"))
-        self.assertTrue(gitutil.is_dirty(path))
-
-    def test_our_own_loop_does_not_block_us(self):
-        path = self.make_repo("alpha")
-        self.write(path, "notes.md", "work\n", age_seconds=3600)
-        self.add_loop("alpha-loop", path, "testbox/cc", minutes_ago=1)
-        self.register_all()
-        self.run_sweep()
         self.assertEqual(self.outcome("alpha"), sync_cmd.SYNCED)
+        self.assertNotIn("soft-lock", self.detail("alpha"))
 
-    def test_a_stale_claim_does_not_block(self):
+    def test_the_stub_claims_no_owner_for_any_repo(self):
         path = self.make_repo("alpha")
-        self.write(path, "notes.md", "work\n", age_seconds=3600)
-        self.add_loop("alpha-loop", path, "otherbox/cc", minutes_ago=120)
-        self.register_all()
-        self.run_sweep()
-        self.assertEqual(self.outcome("alpha"), sync_cmd.SYNCED)
-
-    def test_a_closed_loop_does_not_block(self):
-        path = self.make_repo("alpha")
-        self.write(path, "notes.md", "work\n", age_seconds=3600)
-        frontmatter.write_file(
-            os.path.join(self.root, "loops", "done.md"),
-            {"id": "done", "class": "active", "state": "closed", "repo": path,
-             "last_touch": "%s otherbox/cc"
-                           % clock.parse(clock.now()).isoformat(timespec="minutes")},
-            "",
-        )
-        self.register_all()
-        self.run_sweep()
-        self.assertEqual(self.outcome("alpha"), sync_cmd.SYNCED)
+        self.add_loop("alpha-loop", path, "otherbox/cc", minutes_ago=1)
+        self.assertIsNone(sync_cmd.soft_lock_owner(path, "testbox"))
 
 
 class TestDryRun(SweepTest):
@@ -1293,6 +1279,66 @@ class BoardNoteTest(unittest.TestCase):
 
     def test_no_upstream_is_stated_not_guessed(self):
         self.assertIn("no upstream", sync_cmd.board_note(None))
+
+
+class TestSenseFilesStep(SweepTest):
+    """The GUI-free sensing route folded into the sweep (`sense_files_step`).
+
+    Every test here asserts the step REFUSES to act, which is the only behaviour that can be
+    checked without a mailbox: the step's real work is a Graph pull and an archive write, and
+    a unit test that reached either would be writing into `~/dev/Mail` on the machine it ran
+    on. The decisions the step is built from are tested directly in `tests/test_calroute.py`;
+    what matters here is that none of them can fire from a fixture board.
+    """
+
+    def test_a_dry_run_collects_nothing(self):
+        """A dry run must not pull Graph or write the archive — and must not stamp the report
+        either, since that file is the interval gate and stamping it would make the next real
+        sweep skip a collection that never happened."""
+        self.assertIsNone(sync_cmd.sense_files_step(dry_run=True))
+
+    def test_another_machine_does_nothing(self):
+        """One machine collects, by name: `~/dev/Mail` syncs between the Macs, so a second
+        collector would race the same files and prune what the first just wrote. The fixture
+        board is `test-box`, never the named collector."""
+        self.assertIsNone(sync_cmd.sense_files_step(dry_run=False))
+
+    def test_a_fixture_root_never_reaches_the_real_mailbox(self):
+        """🔴 The guard that makes this suite safe to run anywhere. Even on the real collector
+        machine, a sweep whose board is a temp directory must not touch the live archive —
+        the same guard `mail_reconcile_step` carries, for the same reason.
+        """
+        saved = sync_cmd.calroute.CALENDAR_MACHINE
+        sync_cmd.calroute.CALENDAR_MACHINE = "test-box"
+        self.addCleanup(setattr, sync_cmd.calroute, "CALENDAR_MACHINE", saved)
+        # The machine gate now passes; only the fixture-root guard can stop it.
+        self.assertNotEqual(os.path.realpath(paths.root()),
+                            os.path.realpath(os.path.expanduser("~/dev/Lodestar")))
+        self.assertIsNone(sync_cmd.sense_files_step(dry_run=False))
+
+    def test_the_step_is_registered_before_the_sweep(self):
+        """🔴 Order is load-bearing twice over. The calendar files this step collects live in
+        `~/dev/Mail`, which the sweep commits and pushes in the same pass — written after
+        `sweep()` they would sit uncommitted for an hour. And the capture leg must read files
+        the collector leg just refreshed, which is why both legs are one step rather than two.
+        """
+        import inspect
+        # `_sweep` holds the step order; `main`/`_main` above it are the watchdog wrapper and
+        # the argument parser.
+        source = inspect.getsource(sync_cmd._sweep)
+        self.assertIn("sense_files_step", source)
+        self.assertLess(source.index("sense_files_step"), source.index("results.extend(sweep("),
+                        "sense_files_step must run before sweep(), or the calendar files it "
+                        "collects wait an hour for the next pass to commit them")
+
+    def test_the_capture_leg_covers_both_kinds(self):
+        """Both kinds were orphaned when `sense.py`'s LaunchAgents were deleted, not just
+        calendar — `maildump.try_capture` was the single writer for mail-triage too. Wiring
+        only calendar would leave mail permanently unsensed by the files-first path.
+        """
+        import inspect
+        source = inspect.getsource(sync_cmd.sense_files_step)
+        self.assertIn('"calendar", "mail-triage"', source)
 
 
 if __name__ == "__main__":

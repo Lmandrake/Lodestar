@@ -1,6 +1,6 @@
 ---
 id: LODE-3
-title: Write the demo fleet's first loop
+title: Keep the three demo machines converged
 project: lodestar
 type: build
 status: done
@@ -10,7 +10,7 @@ updated: 2026-01-05T09:00:00-08:00
 source: manual
 ---
 
-Write the demo fleet's first loop.
+Keep the three demo machines converged.
 
 ## Log
 - 2026-01-05T09:00 studio/ticket: new

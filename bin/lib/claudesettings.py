@@ -147,6 +147,27 @@ NEVER_SHARE = frozenset([
 # from this set loses one list entry on a render, is visible in the diff, and is fixed by
 # adding a line here; a wrongly-unioned ordered list corrupts behaviour invisibly and forever.
 # So: declare set-shaped keys explicitly, and add new ones as Claude Code grows them.
+# Rules deliberately removed fleet-wide (owner ruling). Union keys never remove, so `render` and
+# `seed_base` actively strip these exact entries from the result, whichever layer or peer
+# snapshot carried them. Map: union key path -> exact entries. Add a line to retire a rule;
+# the live file is then cleaned on the next sweep.
+RETIRED_RULES = {
+    "permissions.deny": frozenset(["Read(/**/.ssh/**)", "Read(~/**/.ssh/**)",
+                                    "Read(/**/.ssh/**/*[!b])", "Read(~/**/.ssh/**/*[!b])"]),  # owner 2026-11-08
+}
+
+
+def _strip_retired(payload: Dict[str, Any]) -> Dict[str, Any]:
+    for path, dead in RETIRED_RULES.items():
+        parts = path.split(".")
+        node = payload
+        for part in parts[:-1]:
+            node = node.get(part) if isinstance(node, dict) else None
+        if isinstance(node, dict) and isinstance(node.get(parts[-1]), list):
+            node[parts[-1]] = [x for x in node[parts[-1]] if x not in dead]
+    return payload
+
+
 UNION_KEYS = frozenset([
     "permissions.allow",
     "permissions.deny",          # unioned on purpose — see the module docstring
@@ -689,7 +710,7 @@ def seed_base(live: Dict[str, Any],
         if not isinstance(peer, dict):
             continue
         _merge_into(base, _project(peer, UNION_KEYS), drop=MACHINE_LOCAL_DEFAULT, faults=faults)
-    return base
+    return _strip_retired(base)
 
 
 def seed_report(live: Dict[str, Any],
@@ -819,7 +840,7 @@ def render(base: Optional[Dict[str, Any]], overlay: Optional[Dict[str, Any]],
                     target[part] = {}
                 target = target[part]
             target[parts[-1]] = copy.deepcopy(source[parts[-1]])
-    return out
+    return _strip_retired(out)
 
 
 # ---------------------------------------------------------------------------

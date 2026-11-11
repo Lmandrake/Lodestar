@@ -91,6 +91,29 @@ if not os.environ.get("LODESTAR_SWEEP_LOCK"):
     import tempfile as _tf
     os.environ["LODESTAR_SWEEP_LOCK"] = os.path.join(_tf.mkdtemp(prefix="lodestar-sweeplock-"), "sweep.lock")
 
+# Untracked-project markers (bin/lib/untracked.py): no test sees the live machine's markers.
+# Before PRISTINE_ENV, so the baseline includes it (conftest.py sets it too, after the baseline).
+if not os.environ.get("LODESTAR_UNTRACKED_ROOT"):
+    import tempfile as _tf
+    os.environ["LODESTAR_UNTRACKED_ROOT"] = _tf.mkdtemp(prefix="lodestar-untracked-")
+    os.environ["LODESTAR_UNTRACKED_CACHE"] = os.path.join(os.environ["LODESTAR_UNTRACKED_ROOT"], "cache.json")
+
+# Synced press tombstones (bin/lib/tombstone.py): no test reads or writes the live store. Set here,
+# before PRISTINE_ENV, so the isolation baseline includes it (conftest.py sets it too, after the baseline).
+if not os.environ.get("LODESTAR_TOMBSTONE_ROOT"):
+    import tempfile as _tf
+    os.environ["LODESTAR_TOMBSTONE_ROOT"] = _tf.mkdtemp(prefix="lodestar-tombstones-")
+
+# Peer nudge (bin/lib/peernudge.py): no test ever ssh-es the other Mac or spawns a sender. Before
+# PRISTINE_ENV, so the baseline includes it (conftest.py sets it too, after the baseline).
+os.environ["LODESTAR_PEER_NUDGE"] = "off"
+
+# `bin/handoff.py` is a forwarder since 2026-11-10 (the tool moved to MandrakeWorkflows); the
+# moved tool reads LODESTAR_BIN to find THIS checkout's libraries. Set before PRISTINE_ENV so the
+# isolation baseline includes it (conftest.py sets it too, after the baseline).
+os.environ.setdefault("LODESTAR_BIN", os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin"))
+
 PRISTINE_ENV = env_snapshot()
 
 

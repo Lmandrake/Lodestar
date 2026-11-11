@@ -18,7 +18,7 @@ worse than describing it.
 import os
 from typing import Dict, List, NamedTuple, Optional, Sequence, Set
 
-from . import machine, mirrors, registry, skillclone, tombstones
+from . import machine, mirrors, paths, plans as plans_lib, registry, skillclone, tombstones
 
 
 class Fault(NamedTuple):
@@ -46,7 +46,9 @@ _KNOWN_STATES = frozenset({"active", "retired"})
 
 def faults(registry_path: Optional[str] = None,
            machines_path: Optional[str] = None,
-           tombstones_path: Optional[str] = None) -> List[Fault]:
+           tombstones_path: Optional[str] = None,
+           plans_path: Optional[str] = None,
+           approvals_path: Optional[str] = None) -> List[Fault]:
     """Every internal contradiction in the merged registry + tombstones + machines state.
 
     Sorted by (kind, subject) so the report is byte-identical across machines that
@@ -54,9 +56,18 @@ def faults(registry_path: Optional[str] = None,
     property of everything it prints, for the same reason: never sort by anything
     time-dependent, because a differently-ordered report on each machine is its own
     small instance of the "which parser order wins" problem this module exists to end.
+
+    `plans_path`/`approvals_path` default to the real committed `sync/plans.md` /
+    `sync/approvals.md` (via `plans.load_plans`/`plans.load_approvals`, which already treat a
+    missing file as `{}` rather than an error) -- safe to read unconditionally because both
+    are committed board state, so every machine that merged the same commit sees the same
+    plans and approvals and the byte-identical-report property above still holds. Threaded
+    through explicitly, in the same style as the other three paths, so a test can point them
+    at fixtures instead of the real board.
     """
     rows = registry.entries(registry_path)
     store = tombstones.load(tombstones_path)
+    approved_remotes = _approved_rehome_remotes(plans_path, approvals_path)
 
     # The DECLARED rows, with no Machine-paths override applied -- `role=""`/`key=""` makes
     # `registry.entries` skip the override lookup entirely (`here` comes out empty) instead of
@@ -77,9 +88,11 @@ def faults(registry_path: Optional[str] = None,
     found.extend(_supersede_unknown(rows, store))
     found.extend(_unknown_machine(rows, machines_path))
     found.extend(_missing_id(rows))
-    found.extend(_name_remote_mismatch(declared))
+    found.extend(_name_remote_mismatch(declared, approved_remotes))
     found.extend(_mirror_faults(declared, machines_path))
     found.extend(dead_scopes())
+    found.extend(_row_column_counts(registry_path))
+    found.extend(_unpartitioned_rows(registry_path))
 
     return sorted(found, key=lambda fault: (fault.kind, fault.subject))
 
@@ -251,6 +264,40 @@ def dead_scopes(items_path: Optional[str] = None,
     return result
 
 
+def _row_column_counts(registry_path: Optional[str]) -> List[Fault]:
+    path = registry_path or paths.registry_file()
+    if not os.path.exists(path):
+        return []
+    with open(path, "r", encoding="utf-8") as handle:
+        text = handle.read()
+    return [Fault(kind="row-column-count", subject="%s:%d" % (name, line),
+                  detail="registry line %d ('%s') has %d columns but its table header has %d "
+                         "-- a row under the wrong heading is silently reparsed"
+                         % (line, name, got, expected))
+            for line, expected, got, name in registry.column_count_problems(text)]
+
+
+def _unpartitioned_rows(registry_path: Optional[str]) -> List[Fault]:
+    """A row claimed by neither `registry.entries()` nor `registry.machine_paths()`.
+
+    Stronger than `_row_column_counts`: that check compares a row against the header
+    directly above it, so it has nothing to say about a row with no table above it at all,
+    or a later table whose header never matches `machine_paths()`'s `machine`+`path` test.
+    Either way the row is invisible to every reader, the same fate Wisps had under the wrong
+    heading (REGISTRY_ENFORCE_SECTION_COLUMN_COUNTS) -- here one level up, at the table
+    boundary rather than inside a known one.
+    """
+    path = registry_path or paths.registry_file()
+    if not os.path.exists(path):
+        return []
+    with open(path, "r", encoding="utf-8") as handle:
+        text = handle.read()
+    return [Fault(kind="unpartitioned-row", subject="%s:%d" % (name, line),
+                  detail="registry line %d ('%s') is claimed by neither entries() nor "
+                         "machine_paths(): %s" % (line, name, reason))
+            for line, name, reason in registry.partition_problems(text)]
+
+
 def _missing_id(rows: List[registry.Entry]) -> List[Fault]:
     result = []
     for entry in rows:
@@ -279,7 +326,39 @@ def remote_repo_name(url: str) -> str:
     return skillclone.normalize_remote(url).rsplit("/", 1)[-1]
 
 
-def _name_remote_mismatch(rows: List[registry.Entry]) -> List[Fault]:
+def _approved_rehome_remotes(plans_path: Optional[str],
+                              approvals_path: Optional[str]) -> Dict[str, str]:
+    """repo_id -> normalized remote, for every APPROVED `rehome` plan whose `new` cell names a
+    remote (the release-mirror pattern: ticket VALIDATE_CORRECT_DEV_SUFFIX_FALSE_FAULTS).
+
+    An approved rehome plan is a human decision already recorded in the board's own evidence
+    trail (`plans.approved`, which itself requires the fingerprint still match -- a plan that
+    changed since approval does NOT count, same as everywhere else that function is used). A
+    row whose declared `Remote` matches what the plan says the repo was rehomed to is therefore
+    not a half-applied rename; it is that decision taking effect. Only `rehome` plans qualify --
+    a `rename`/`retire`/`quarantine`/`purge` plan's `new` cell is not a remote coordinate (see
+    `plans.KINDS`'s docstring on `purge`), so widening this to "any plan kind" would be reading
+    the wrong column as a remote and matching nothing, or worse, matching something by accident.
+
+    Returns normalized (via `skillclone.normalize_remote`) so the caller can compare forms
+    without re-normalizing, and so an ssh vs https spelling of the same declared remote is one
+    key, not two.
+    """
+    plans = plans_lib.load_plans(plans_path)
+    approvals = plans_lib.load_approvals(approvals_path)
+    result = {}  # type: Dict[str, str]
+    for plan in plans.values():
+        if plan.kind != "rehome" or not plan.repo_id or not plan.new:
+            continue
+        ok, _ = plans_lib.approved(plan, approvals)
+        if not ok:
+            continue
+        result[plan.repo_id] = skillclone.normalize_remote(plan.new)
+    return result
+
+
+def _name_remote_mismatch(rows: List[registry.Entry],
+                           approved_remotes: Optional[Dict[str, str]] = None) -> List[Fault]:
     """The owner's 2026-09-30 invariant: a managed repo's directory name and its remote's
     repository name must be the same string.
 
@@ -303,7 +382,18 @@ def _name_remote_mismatch(rows: List[registry.Entry]) -> List[Fault]:
     check. Rows are NOT filtered by `State` -- a retired row with a mismatched remote still
     costs one non-blocking line, and a state filter here would be a second place for a
     lifecycle rule to drift out of step with `_active_but_retired`.
+
+    `approved_remotes` (repo_id -> normalized remote, from `_approved_rehome_remotes`) is the
+    release-mirror escape hatch: 2026-10-28 approved rehome plans deliberately gave five repos a
+    `-dev`-suffixed private remote while the row keeps the plain name and directory (the public
+    mirror takes the plain name). A row whose Id has an approved plan declaring EXACTLY the
+    remote the row now carries is that decision taking effect, not a contradiction -- both
+    faults are suppressed for it, as a pair, because the directory and the row name are both
+    following the same recorded decision. A row whose remote does NOT match its plan's declared
+    remote still faults on both kinds: an approval is evidence for one specific remote, never a
+    blanket "any mismatch on this id is fine."
     """
+    approved_remotes = approved_remotes or {}
     result = []
     for entry in rows:
         if not entry.remote:
@@ -312,6 +402,9 @@ def _name_remote_mismatch(rows: List[registry.Entry]) -> List[Fault]:
         if not repo:
             continue
         subject = entry.repo_id or entry.name
+        if entry.repo_id and entry.repo_id in approved_remotes:
+            if approved_remotes[entry.repo_id] == skillclone.normalize_remote(entry.remote):
+                continue
         if entry.name.lower() != repo:
             result.append(Fault(
                 kind="name-remote-mismatch", subject=subject,

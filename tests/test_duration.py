@@ -1,7 +1,7 @@
 """Tests for lib.duration — the short-duration parser, and its "unknown" sentinel.
 
 T4 ruling, 2026-10-14 (question card "Yes, mark them 'unknown'",
-docs/superpowers/specs/2026-10-14-project-tracking-system-design.md): `actual_spent` loops used
+design/specs/2026-10-14-project-tracking-system-design.md): `actual_spent` loops used
 to seed `0m` for "never recorded", which read as a real zero to anyone who didn't already know
 the convention. `duration.UNKNOWN` ("unknown") is the explicit replacement, and it must never be
 treated as zero by anything that calls `minutes()`.

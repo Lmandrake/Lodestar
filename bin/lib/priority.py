@@ -1,6 +1,6 @@
 """Beacons and sightings — the single high-priority items registry.
 
-See `docs/superpowers/specs/2026-10-06-high-priority-beacons-design.md`.
+See `design/specs/2026-10-06-high-priority-beacons-design.md`.
 
 A **beacon** (`sticky=True`) is a standing, named risk (a vendor dispute holding up a project) that stays open and
 keeps resurfacing until explicitly closed, regardless of whether new evidence has arrived
@@ -284,7 +284,7 @@ def _bootstrap(target: str) -> None:
         handle.write("# Priority items\n\n")
         handle.write("One row per high-priority item: a sticky **beacon** (repeat until "
                      "closed) or a one-time **sighting**. See "
-                     "docs/superpowers/specs/2026-10-06-high-priority-beacons-design.md.\n\n")
+                     "design/specs/2026-10-06-high-priority-beacons-design.md.\n\n")
         handle.write(header)
         handle.write(sep)
 

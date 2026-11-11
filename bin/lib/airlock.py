@@ -14,7 +14,7 @@ already made once. `validate_capture` / `validate_request` ask "is this FILE wel
 whose 06:00 run found a dead connector and whose 09:38 retry succeeded is a good day, even
 though one of its files honestly reports `unreachable`.
 
-See docs/superpowers/specs/2026-08-31-lodestar-phase-2-airlock-design.md.
+See design/specs/2026-08-31-lodestar-phase-2-airlock-design.md.
 """
 
 import os

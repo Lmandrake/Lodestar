@@ -787,6 +787,32 @@ def claudemd_drift():
             "`claudeconf.py render` to overwrite it.")
 
 
+def _copy_memory(src, dst):
+    """Copy one memory file into the snapshot; a file naming an untracked project is copied with
+    those lines redacted (lib/untracked.py), never verbatim. False when nothing was copied."""
+    from lib import untracked
+    try:
+        with open(src, encoding="utf-8") as fh:
+            text = fh.read()
+    except (OSError, UnicodeDecodeError):
+        shutil.copy2(src, dst)
+        return True
+    if not untracked.is_untracked_text(text):
+        shutil.copy2(src, dst)
+        return True
+    kept = [untracked.REDACTED if untracked.is_untracked_text(l) else l for l in text.split("\n")]
+    new = "\n".join(kept)
+    try:
+        with open(dst, encoding="utf-8") as fh:
+            if fh.read() == new:
+                return True
+    except OSError:
+        pass
+    with open(dst, "w", encoding="utf-8") as fh:
+        fh.write(new)
+    return True
+
+
 def snapshot_all():
     """Copy settings.json, statusline.sh, and auto-memory into the repo.
 
@@ -814,11 +840,15 @@ def snapshot_all():
         if not entries:
             continue  # about half of the project memory dirs are empty; do not create noise
         project = os.path.basename(os.path.dirname(source))
+        from lib import untracked
+        if untracked.is_untracked_path(project):
+            continue  # an untracked project's memory never enters a Lodestar snapshot
         destination = os.path.join(memory_root, project)
         os.makedirs(destination, exist_ok=True)
         for entry in entries:
-            shutil.copy2(entry, os.path.join(destination, os.path.basename(entry)))
-            files += 1
+            target_file = os.path.join(destination, os.path.basename(entry))
+            if _copy_memory(entry, target_file):
+                files += 1
         projects += 1
     return copied, files, projects
 
@@ -855,8 +885,11 @@ def cmd_check(args):
 
     live_memory = sorted(glob.glob(os.path.join(CLAUDE_HOME, "projects", "*", "memory")))
     stale = 0
+    from lib import untracked
     for source in live_memory:
         project = os.path.basename(os.path.dirname(source))
+        if untracked.is_untracked_path(project):
+            continue
         root = memory_snapshot_dir()
         if root is None:
             problems.append("auto-memory snapshot withheld: work machine with no usable "
@@ -865,6 +898,8 @@ def cmd_check(args):
         target = os.path.join(root, project)
         for entry in sorted(glob.glob(os.path.join(source, "*.md"))):
             saved = os.path.join(target, os.path.basename(entry))
+            if os.path.exists(saved) and untracked.is_untracked_text(open(entry, encoding="utf-8", errors="replace").read()):
+                continue  # snapshotted redacted on purpose (_copy_memory)
             if not os.path.exists(saved) or not filecmp.cmp(entry, saved, shallow=False):
                 stale += 1
     if stale:

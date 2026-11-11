@@ -40,8 +40,9 @@ import re
 from typing import Dict, List, NamedTuple, Optional, Tuple
 
 try:  # keep importable both as `lib.conversations` and as a plain sibling
-    from lib import gitutil, prosehome, registry, satellites
+    from lib import gitutil, prosehome, registry, satellites, untracked
 except ImportError:  # pragma: no cover - exercised only by direct-path imports
+    import untracked  # type: ignore
     import gitutil  # type: ignore
     import prosehome  # type: ignore
     import registry  # type: ignore
@@ -234,6 +235,8 @@ def attribute(jsonl_path: str) -> Attribution:
     seen = cwds(jsonl_path)
     if not seen:
         return Attribution(None, "unrooted", "transcript carries no cwd")
+    if any(untracked.is_untracked_path(c) for c in seen):
+        return Attribution(None, "untracked", "untracked project: never recorded")
     for cwd in seen:
         root = repo_root_of(cwd)
         if root:
@@ -316,6 +319,31 @@ def record_dir(project_root: str) -> str:
 
 def record_path(project_root: str, jsonl_path: str) -> str:
     return os.path.join(record_dir(project_root), record_name(jsonl_path))
+
+
+#: What stands in for a block that named an untracked project (lib/untracked.py).
+REDACTED = "_(redacted: untracked project)_"
+
+
+def redact_markdown(text: str) -> str:
+    """An existing record, redacted the way `render` now writes it: every paragraph (or list
+    line) that names an untracked project becomes REDACTED. For records whose transcript is
+    gone, so cannot be re-rendered."""
+    out, changed = [], False
+    for para in text.split("\n\n"):
+        if untracked.is_untracked_text(para):
+            lines = para.split("\n")
+            if all(l.startswith("- ") for l in lines if l.strip()):
+                kept = [l for l in lines if not untracked.is_untracked_text(l)]
+                para = "\n".join(kept) if kept else REDACTED
+            elif para.startswith("# ") or para.startswith("- Session"):
+                para = "\n".join(REDACTED if untracked.is_untracked_text(l) else l
+                                 for l in para.split("\n"))
+            else:
+                para = REDACTED
+            changed = True
+        out.append(para)
+    return "\n\n".join(out) if changed else text
 
 
 def _clean(text: str) -> str:
@@ -487,16 +515,22 @@ def render(jsonl_path: str, speaker: str = "Lukas") -> str:
     for block in blocks:
         body.append("")
         body.append("## %s" % (speaker if block.role == "user" else "Claude"))
-        if block.text:
+        text, actions = block.text, block.actions
+        if untracked.active():
+            # an untracked project is never named in any record (lib/untracked.py)
+            if text and untracked.is_untracked_text(text):
+                text = REDACTED
+            actions = [a for a in actions if not untracked.is_untracked_text(a)]
+        if text:
             body.append("")
-            body.append(block.text)
-        if block.actions:
+            body.append(text)
+        if actions:
             body.append("")
-            shown = block.actions[:ACTION_CAP]
+            shown = actions[:ACTION_CAP]
             body.extend("- `%s`" % line for line in shown)
-            if len(block.actions) > ACTION_CAP:
+            if len(actions) > ACTION_CAP:
                 body.append("- _...and %d more action(s)_"
-                            % (len(block.actions) - ACTION_CAP))
+                            % (len(actions) - ACTION_CAP))
 
     return "\n".join(head + body).rstrip() + "\n"
 
@@ -549,6 +583,8 @@ def sessions_for(project_root: str, home: Optional[str] = None) -> List[str]:
     Filters `transcripts_for` through `attribute`, which is what makes the mangling
     collision harmless rather than silently cross-filing two projects' records.
     """
+    if untracked.is_untracked_path(project_root):
+        return []
     root = os.path.realpath(project_root)
     kept = []
     for path in transcripts_for(project_root, home):

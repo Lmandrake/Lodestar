@@ -11,8 +11,13 @@ automated resolver closes only on SATISFIED (an agent acting by hand may do the 
   beacons    beacons and sightings (`priority/items.md`)
   tickets    every project's `tickets/<ID>.md` on this machine
 
-Also the `conv_answered` check kind: Lukas wrote in a conversation after a given time (what
-Bearing's alert memory records). Labels are ids and short hashes only: safe in any session.
+Also two symmetric check kinds, both reading Bearing's alert memory: `conv_answered` (Lukas
+wrote in a conversation after a given time -- the outcome of a reply HE owes) and
+`counterparty_answered` (the OTHER side wrote after a given time -- the outcome of a
+`waiting_for`, where he is owed). Each closes only the obligation kind it actually measures
+(LODESTAR_FIX_WAITING_FOR_CHECK_MET_BY_OWN_ASK, 2026-11-10): `conv_answered` checks `last_self`,
+so attaching it to a `waiting_for` let his OWN opening ask satisfy itself. Labels are ids and
+short hashes only: safe in any session.
 """
 
 from __future__ import annotations
@@ -74,15 +79,52 @@ def _conv_answered(spec: Dict, limit: float) -> Result:
 outcome.register_check("conv_answered", {"conversation": outcome.is_text, "after": outcome.is_iso},
                        _conv_answered, local=True, closes=False)
 
-#: obligation kinds whose outcome IS a reply from Lukas (needs-you detections)
-REPLY_KINDS = ("reply",)
+
+def _counterparty_answered(spec: Dict, limit: float) -> Result:
+    """The symmetric half of `conv_answered`: the OTHER side wrote after a given time -- the
+    outcome a `waiting_for` actually needs (he is owed a reply, not the asker's own ask)."""
+    from lib import bearingalerts
+    try:
+        rec = bearingalerts._load(bearingalerts.state_path())["convs"].get(spec["conversation"])
+    except Exception as e:  # noqa: BLE001
+        return Result(outcome.UNKNOWN, "conversation memory unreadable: %s" % type(e).__name__)
+    if not rec:
+        return Result(outcome.UNKNOWN, "conversation not in this machine's memory")
+    after = datetime.fromisoformat(spec["after"])
+    theirs = rec.get("last_in") or ""
+    try:
+        if theirs and datetime.fromisoformat(theirs) > after:
+            return Result(outcome.SATISFIED, "the other side wrote in the conversation at %s" % theirs)
+    except ValueError:
+        return Result(outcome.UNKNOWN, "conversation memory has a bad timestamp")
+    return Result(outcome.NOT_SATISFIED, "no message from the other side since the ask")
 
 
-def _reply_grade(item: Item, reply_owed: bool) -> tuple:
-    if (item.check or {}).get("type") == "conv_answered":
-        return ((True, "") if reply_owed else
-                (False, "a reply in the conversation does not complete a %s" % (item.raw or "task")))
-    return outcome.closure_grade(item.check)
+# Fact-grade by default, same reasoning as conv_answered: closing is a store decision
+# (ReckoningStore.may_close), never this check kind's own opinion.
+outcome.register_check("counterparty_answered",
+                       {"conversation": outcome.is_text, "after": outcome.is_iso},
+                       _counterparty_answered, local=True, closes=False)
+
+#: Which obligation `kind` each conversation-memory check kind actually proves the outcome of.
+#: A mismatch (LODESTAR_FIX_WAITING_FOR_CHECK_MET_BY_OWN_ASK, 2026-11-10: `conv_answered` --
+#: Lukas's own `last_self` -- attached to a `waiting_for`, so his OWN opening ask satisfied it)
+#: is graded a fact, never a close.
+CONV_CHECK_OUTCOME_KIND = {"conv_answered": "reply", "counterparty_answered": "waiting_for"}
+
+
+def _reply_grade(item: Item, is_reply_store: bool) -> tuple:
+    """Grade a conversation-memory check against what kind of obligation it actually proves.
+    `is_reply_store`: True for a store whose every live item IS a reply owed (alerts); the
+    Reckoning instead reads the obligation's own `kind` (`item.raw`)."""
+    ck = (item.check or {}).get("type")
+    wants = CONV_CHECK_OUTCOME_KIND.get(ck)
+    if wants is None:
+        return outcome.closure_grade(item.check)
+    kind = "reply" if is_reply_store else (item.raw or "")
+    if kind == wants:
+        return True, ""
+    return False, "a %s check does not complete a %s" % (ck, kind or "task")
 
 
 # --------------------------------------------------------------------------- alerts
@@ -141,7 +183,7 @@ class AlertsStore(Store):
         return []
 
     def may_close(self, item: Item) -> tuple:
-        return _reply_grade(item, True)     # an alert IS "a reply is owed here"
+        return _reply_grade(item, is_reply_store=True)     # an alert IS "a reply is owed here"
 
     def attach(self, item_id: str, spec: Dict, trusted: bool = False) -> str:
         from lib import bearingalerts
@@ -208,7 +250,7 @@ class ReckoningStore(Store):
                     "obligation %s" % rec["ob"][:12], rec.get("kind") or "", note)
 
     def may_close(self, item: Item) -> tuple:
-        return _reply_grade(item, item.raw in REPLY_KINDS)
+        return _reply_grade(item, is_reply_store=False)
 
     def close(self, item: Item, result: Result, by: str) -> str:
         from lib import reckoning as rk

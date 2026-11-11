@@ -6,7 +6,7 @@
     demo_fleet.py --tour --workdir D   # ... in D (kept afterwards; D must be empty or absent)
 
 Everything here is invented: three machines (`studio`, `laptop`, `tower`), six repos, a board
-with loops and tickets, global CLAUDE.md rules with one overlay per machine, and a skills table
+with tickets, global CLAUDE.md rules with one overlay per machine, and a skills table
 with one row deliberately pointing at a target that does not exist.
 
 **The sandbox.** Each machine is its own HOME (`<workdir>/machines/<name>`), holding
@@ -147,18 +147,16 @@ SKILLS_MD = """# Skills — the global set, declared (demo fleet)
 | retired-skill | ~/dev/Atelier/skills/retired-skill |  | all |
 """
 
-LOOPS = (
-    ("demo-sync-health", "Keep the three demo machines converged", "active", "open", "1h"),
-    ("demo-notebook-rename", "Rename Fieldnotes to Notebook on every machine", "active", "open",
-     "30m"),
-    ("demo-skill-cleanup", "Remove the retired-skill row once nothing needs it", "background",
-     "open", "15m"),
-)
+# `LOOPS` was removed 2026-11-10 with the loop concept
+# (design/plans/2026-11-10-retire-loops.md). The tour seeded three loop files and rendered them
+# into BOARD.md; both the fixture and the renderer are gone. The three threads of work it was
+# demonstrating are tickets below, which is the point of the retirement.
 
 TICKETS = (
     ("LODE-1", "Drop the retired-skill row from claude/skills.md", "repair", "open"),
     ("LODE-2", "Give the tower a battery-free overlay note", "build", "open"),
-    ("LODE-3", "Write the demo fleet's first loop", "build", "done"),
+    ("LODE-3", "Keep the three demo machines converged", "build", "done"),
+    ("LODE-4", "Rename Fieldnotes to Notebook on every machine", "build", "open"),
 )
 
 STAMP = "2026-01-05T09:00:00-08:00"
@@ -188,12 +186,6 @@ REPO_FILES = {
 }
 
 
-def loop_md(loop_id, title, klass, state, est):
-    return ("---\nid: %s\ntitle: %s\nclass: %s\nstate: %s\naccount:\nrepo: Lodestar\n"
-            "est_close: %s\nactual_spent: unknown\nopened: 2026-01-05\nlast_touch: %s studio/cc\n"
-            "deadline:\n---\n" % (loop_id, title, klass, state, est, STAMP))
-
-
 def ticket_md(tid, title, ttype, status):
     return ("---\nid: %s\ntitle: %s\nproject: lodestar\ntype: %s\nstatus: %s\nowner: demo\n"
             "created: %s\nupdated: %s\nsource: manual\n---\n\n%s\n\n## Log\n- %s studio/ticket: new\n"
@@ -217,8 +209,6 @@ def seed_files():
         files["board/claude/global/" + name] = text
     for key, text in OVERLAYS.items():
         files["board/claude/global/machines/%s.md" % key] = text
-    for loop in LOOPS:
-        files["board/loops/%s.md" % loop[0]] = loop_md(*loop)
     for ticket in TICKETS:
         files["board/tickets/%s.md" % ticket[0]] = ticket_md(*ticket)
     for repo, entries in REPO_FILES.items():
@@ -493,10 +483,10 @@ class Fleet:
         self.result["check_flags_broken_link"] = ("retired-skill" in proc.stdout
                                                   and "dangling" in proc.stdout)
 
-        self.heading("7. The board and the ticket list")
-        proc = self.lodestar("studio", "board.py")
-        with open(os.path.join(self.board("studio"), "BOARD.md"), encoding="utf-8") as handle:
-            self.show(handle.read(), keep=("|", "##"), limit=14)
+        # Was "7. The board and the ticket list", rendering BOARD.md with `board.py`. The board
+        # and that command were retired 2026-11-10 with the loop; the ticket list is the surface
+        # that answers what the board used to.
+        self.heading("7. The ticket list")
         proc = self.lodestar("studio", "ticket.py", "list", "--project", "lodestar")
         self.say("\n  [studio] bin/ticket.py list --project lodestar   (exit %d)" % proc.returncode)
         self.show(proc.stdout, limit=10)

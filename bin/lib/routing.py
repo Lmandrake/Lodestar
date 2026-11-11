@@ -1,6 +1,6 @@
 """Per-project keyword/sender routing, with autonomous list maintenance.
 
-See docs/superpowers/specs/2026-10-08-bearing-cycling-design.md's Routing section. One central
+See design/specs/2026-10-08-bearing-cycling-design.md's Routing section. One central
 registry (priority/routing.md) rather than scattering a keyword list into every project's own
 loop file — simpler to maintain for the same reason sync/registry.md is one file, not one per
 machine.
@@ -134,8 +134,13 @@ def load_projects(path: Optional[str] = None) -> List[Project]:
     skipped by requiring the project column to not be the literal header word or a `---`
     separator — same shape every other Lodestar mdtable parser uses. The default table is
     unioned with the private overlay (`overlay_path`); an explicit `path` is read alone."""
+    from . import untracked
+
+    def visible(rows):  # an untracked project never gets a routing row (lib/untracked.py)
+        return [p for p in rows
+                if not (untracked.is_untracked_name(p.name) or untracked.is_untracked_path(p.dir))]
     if path is None or os.path.realpath(path) == os.path.realpath(DEFAULT_PATH):
-        return _with_overlay(_parse_rows(DEFAULT_PATH if path is None else path))
+        return visible(_with_overlay(_parse_rows(DEFAULT_PATH if path is None else path)))
     path = path or DEFAULT_PATH
     projects = []
     with open(path, encoding="utf-8") as f:
@@ -149,7 +154,7 @@ def load_projects(path: Optional[str] = None) -> List[Project]:
             kw = tuple(k.strip() for k in m.group("keywords").split(",") if k.strip())
             senders = tuple(s.strip() for s in m.group("senders").split(",") if s.strip())
             projects.append(Project(name=project, dir=pdir, keywords=kw, senders=senders))
-    return projects
+    return visible(projects)
 
 
 def match(text: str, projects: List[Project]) -> Optional[str]:

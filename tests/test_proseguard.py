@@ -12,7 +12,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bin"))
 
-from lib import frontmatter, gitutil, journal, loops, paths, proseguard  # noqa: E402
+from lib import frontmatter, gitutil, journal, paths, proseguard  # noqa: E402
 from tests.test_reckoning import make_checkout  # noqa: E402
 from tests.test_sendreceive import SendReceiveTest  # noqa: E402
 
@@ -135,12 +135,17 @@ class FixTest(GuardBase):
         self.assertNotIn("note", record)
         self.assertTrue(record["note_withheld"])
 
-    def test_upsert_with_a_body_and_no_store_writes_nothing(self):
+    def test_write_body_with_no_store_writes_nothing(self):
+        """Was `test_upsert_with_a_body_and_no_store_writes_nothing`; `loops.upsert` was retired
+        2026-11-10. The property is the RULING, not the loop: prose must never be written to
+        Lodestar (a github.com repo) as a fallback when the private store is unreachable, and
+        the refusal must come BEFORE anything is written."""
         from lib import privatestore
         self.no_store()
         with self.assertRaises(privatestore.Unavailable):
-            loops.upsert("alpha", {}, body="prose")
-        self.assertFalse(os.path.exists(paths.loop_file("alpha")))
+            proseguard.write_body("alpha", "prose")
+        self.assertFalse(os.path.exists(
+            os.path.join(paths.loops_dir(), "alpha.md")))
 
 
 class ViolationsTest(GuardBase):

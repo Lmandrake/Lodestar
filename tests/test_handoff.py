@@ -96,6 +96,16 @@ class TestContentContract(Base):
         p = self.write(doc(traps="- the probe lies at scale (see: docs/X.md)"))
         self.assertEqual(handoff.todo_scan(p), [])
 
+    def test_self_cited_trap_is_refused(self):
+        # LODESTAR_REFUSE_SELF_CITED_TRAPS_BEFORE_CULL_DELETES_THEM: `(see: this handoff)`
+        # names no OTHER document, so --cull would delete the only copy of the lesson.
+        p = self.write(doc(traps="- stage_inbox stages every non-dot file (see: this handoff)"))
+        probs = handoff.todo_scan(p)
+        self.assertTrue(any("filed" in x for x in probs), probs)
+        p2 = self.write(doc(traps="- another one (see: the handoff)"))
+        probs2 = handoff.todo_scan(p2)
+        self.assertTrue(any("filed" in x for x in probs2), probs2)
+
     def test_unattributed_dirty_line_is_refused(self):
         p = self.write(doc(extra="\n```\n M some/file   %s\n```"
                                  % handoff.WHOSE))
@@ -541,6 +551,15 @@ class TestCullRule(TestGitModes):
         _, out = self.run_cull()
         self.assertNotIn(old, out)
 
+    def test_self_cited_trap_blocks_cull(self):
+        # LODESTAR_REFUSE_SELF_CITED_TRAPS_BEFORE_CULL_DELETES_THEM: a trap citing "this
+        # handoff" names no other home, so --cull must never treat it as filed.
+        old = "BENCH_HANDOFF_202601010000.md"
+        self.handoff(old, traps="- stage_inbox stages every non-dot file (see: this handoff)")
+        self.handoff("BENCH_HANDOFF_%s.md" % _stamp(8))
+        _, out = self.run_cull()
+        self.assertNotIn(old, out)
+
     def test_a_committed_then_drained_harvest_files_what_it_names(self):
         old = "BENCH_HANDOFF_202601010000.md"
         self.handoff(old, carry="an unfiled insight that nobody copied anywhere at all")
@@ -612,6 +631,13 @@ class TestAutoFile(TestGitModes):
         units = handoff.lesson_units(doc().replace("nothing this wave", self.PARA),
                                      handoff.LESSON_SECTIONS[:1])
         self.assertEqual(len(units), 1, units)
+
+    def test_empty_phrasings_are_not_lessons(self):
+        for phrase in ("Nothing new this wave.", "nothing new", "None this wave.",
+                       "Nothing this wave.", "none."):
+            units = handoff.lesson_units(doc().replace("nothing this wave", phrase),
+                                         handoff.LESSON_SECTIONS[:1])
+            self.assertEqual(units, [], phrase)
 
     def test_one_citation_at_a_paragraphs_end_files_the_whole_paragraph(self):
         text = doc().replace("nothing this wave", self.PARA + " (filed: LESSONS)")

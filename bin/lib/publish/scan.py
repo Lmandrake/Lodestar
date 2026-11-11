@@ -136,6 +136,17 @@ def load_lists(publish_dir: str) -> Lists:
         path = os.path.join(publish_dir, "%s.txt" % key)
         lists[key] = read_list(path, "%s.txt" % key)
         digests[key] = sha256_file(path)
+    # An untracked project's words are terms everywhere, without naming it in terms.txt: they
+    # come from its own `.lodestar-untracked` marker (lib/untracked.py).
+    try:
+        from lib import untracked
+        extra = sorted({w for s in untracked.specs() for w in s["keywords"] + sorted(s["names"])
+                        if len(w) > 3})
+        lists["terms"] = list(lists["terms"]) + [w for w in extra if w not in lists["terms"]]
+        lists["terms"] += [w.title() for w in extra if w.title() not in lists["terms"]]
+        lists["terms"] += [w.upper() for w in extra if w.upper() not in lists["terms"]]
+    except Exception:  # noqa: BLE001 - the private lists still stand on their own
+        pass
     return Lists(lists["names"], lists["terms"], lists["hosts"], digests)
 
 

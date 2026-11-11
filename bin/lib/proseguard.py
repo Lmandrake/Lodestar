@@ -492,6 +492,16 @@ def markers(lines: Iterable[str]) -> List[str]:
     return found
 
 
+def _names_untracked(rel: str, lines: Iterable[str]) -> bool:
+    try:
+        from lib import untracked
+    except ImportError:  # pragma: no cover
+        import untracked  # type: ignore
+    if not untracked.active():
+        return False
+    return untracked.is_untracked_text(rel) or any(untracked.is_untracked_text(l) for l in lines)
+
+
 def _scanned(rel: str) -> bool:
     """Marker scanning covers board state. Source and docs are authored commits; tests and
     code carry the marker patterns themselves."""
@@ -589,6 +599,9 @@ def violations(repo: str, candidates: Sequence[str], staged: bool = False,
                 hits = markers(_added_lines(repo, rel, None, staged, text=text))
                 if hits:
                     why = "private marker on an added line: %s" % ", ".join(hits)
+            if not why and _names_untracked(rel, _added_lines(repo, rel, None, staged, text=text)):
+                # every file, source included: an untracked project is never named in Lodestar
+                why = "names an untracked project (lib/untracked.py); nothing about it is recorded here"
         except (GuardError, OSError) as error:
             why = "could not be checked (%s) — refused" % error
         if why:

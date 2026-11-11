@@ -45,8 +45,8 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from lib import (claudesettings, claudestatusline, clock, completions,  # noqa: E402
-                 conversations, duration, enroll, freshness, gitutil, heartbeat, loops,
+from lib import (calroute, claudesettings, claudestatusline, clock, completions,  # noqa: E402
+                 conversations, duration, enroll, freshness, gitutil, heartbeat, hostaddr,
                  machine, mailreconcile, mirrors, paths, plans, proseguard, purge, pushguard, registry,
                  repopause, selfsync, skillclone, sweeplock, validate)
 import claudeconf  # noqa: E402
@@ -393,39 +393,23 @@ def remote_note(tier: str, fetched: bool, remote_age: Optional[float]) -> str:
 
 def soft_lock_owner(repo_path: str, our_role: str,
                     window_minutes: int = SOFT_LOCK_MINUTES) -> Optional[str]:
-    """Return the other machine's role if it recently claimed a loop bound to this repo.
+    """Retired 2026-11-10: always None. The loop WAS the lock, and the loop is gone.
 
-    The cheapest conflict is the one that never happens. Lodestar already records which
-    machine has a loop attached, so the sweep treats that as an advisory lock: pull, but do
-    not auto-commit work another machine is actively holding. Advisory, not enforced — it
-    encodes "work a repo on one machine at a time", which is how a single owner typically works.
+    This asked "has another machine recently claimed an open loop bound to this repo?" and, if
+    so, the sweep pulled but did not auto-commit — advisory, not enforced, encoding "work a
+    repo on one machine at a time". It read the loop's `repo` field and the machine stamp in
+    its `last_touch`, both of which the loop retirement removed
+    (design/plans/2026-11-10-retire-loops.md).
+
+    🔴 **This is a real regression and it is NOT silently dropped**: ticket
+    `LODESTAR_REPLACE_SWEEP_SOFT_LOCK_LOOP_WAS_THE_LOCK`. A cross-machine claim cannot live in
+    a synced repo (nothing under `airlock/` may hold per-machine state), so rebuilding it is
+    its own piece of work rather than a line in a cutover. The cost of its absence is bounded:
+    two machines sweeping one repo produce a flagged row and a rebase, not lost work.
+
+    The function is kept as a stub rather than deleted so the one caller keeps its shape and
+    the removal stays visible to a reader of the send phase.
     """
-    target = os.path.realpath(repo_path)
-    for _, (fields, _) in sorted(loops.all_loops().items()):
-        bound = fields.get("repo", "").strip()
-        if not bound:
-            continue
-        if os.path.realpath(os.path.expanduser(bound)) != target:
-            continue
-        if fields.get("state") != "open":
-            continue
-
-        touch = fields.get("last_touch", "").strip()
-        if not touch:
-            continue
-        parts = touch.split()
-        if len(parts) < 2:
-            continue
-        stamp, owner = parts[0], parts[1]
-        role = owner.split("/")[0]
-        if role == our_role:
-            continue
-        try:
-            age = clock.parse(clock.now()) - clock.parse(stamp)
-        except ValueError:
-            continue
-        if age.total_seconds() <= window_minutes * 60:
-            return owner
     return None
 
 
@@ -721,8 +705,7 @@ def sweep_one(entry, our_role: str, quiescence_minutes: int, dry_run: bool,
         defer_send = None
         owner = soft_lock_owner(repo, our_role)
         if owner:
-            defer_send = ("soft-lock: %s holds an open loop on this repo; not committed"
-                          % owner)
+            defer_send = ("soft-lock: %s holds this repo; not committed" % owner)
         elif not gitutil.quiescent(repo, quiescence_minutes * 60, candidates):
             defer_send = ("changed within the last %dm — waiting for it to settle"
                           % quiescence_minutes)
@@ -1259,6 +1242,128 @@ def mail_reconcile_step(dry_run: bool) -> Optional[Result]:
                   [l for l in lines if l.startswith(("GAP", "repair"))][:20])
 
 
+def sense_files_step(dry_run: bool) -> Optional[Result]:
+    """The GUI-free sensing route: refresh the calendar dump, then write both airlock captures.
+
+    None when it is not this machine's turn, when the interval has not elapsed, or when there
+    was nothing to report.
+
+    **What this closes.** Two legs of sensing were unscheduled, which is why calendar "worked
+    by hand and never on a timer" (2026-11-06):
+
+    * **Collect** — Graph into `~/dev/Mail/cal--*.md` (`bin/calendar_dump.py`). Mail's own
+      equivalent is `mail_reconcile_step` above; calendar had no scheduled caller anywhere,
+      and the mail census cannot stand in for one (`mailreconcile.disk_names_by_day` skips
+      `cal` files by name, so it is mail-only by construction).
+    * **Capture** — those files into `airlock/captures/<date>/` (`maildump.try_capture`).
+      Its only caller was `bin/sense.py`, whose LaunchAgents were deleted on 2026-11-06
+      because they drove Claude Desktop's UI and took the owner's screen. The capture writer
+      foregrounds nothing and was always the good half; it lost its trigger along with the
+      GUI half it happened to sit behind. **Both kinds were orphaned, not just calendar** —
+      so mail-triage is captured here too, or mail would be left half-wired.
+
+    🔴 **THE ORDER IS COLLECT-THEN-CAPTURE AND IT CANNOT BE REVERSED.**
+    `airlock.source_freshness` measures `captured - source_as_of`, where `source_as_of` is the
+    newest mtime among the files a capture actually read, against a 24 h threshold for
+    calendar. Capturing BEFORE the refresh — or scheduling the capture leg alone — writes a
+    fresh `captured` over a frozen `source_as_of` and reports STALE SOURCE for ever. That is
+    verbatim the incident `SOURCE_STALE_AFTER` exists to catch ("five days of `status:
+    sensed` calendar captures, gate PASSED every one, built from the same Sep-3 files"), so
+    the reversed order is not a slower fix, it is the original bug with extra steps.
+
+    **Nothing here foregrounds an application** and nothing here needs a new LaunchAgent: it
+    rides the sweep that is already scheduled, on the machine that already carries the mail
+    census, under the same graphaccess interpreter. Registering a launchd job on this host is
+    the owner's call, not an agent's. The Bearing cycle was the other candidate and was
+    rejected on cadence: it ticks every 600 s, and a 561-event Graph pull at that rate is
+    waste where `calroute.MIN_INTERVAL_HOURS` is ample.
+
+    A capture carries real meeting titles and senders, so it is gitignored here and mirrored
+    to the private store by `maildump` itself; this step reports COUNTS ONLY.
+    """
+    if dry_run or machine.key() != calroute.CALENDAR_MACHINE:
+        return None
+    # Only from the real checkout: a sweep run against a fixture root (every sync test) must
+    # never reach a real mailbox or write into the archive. Same guard as the mail census.
+    if os.path.realpath(paths.root()) != os.path.realpath(os.path.expanduser("~/dev/Lodestar")):
+        return None
+
+    report = paths.state_file(calroute.REPORT_NAME)
+    mtime = os.path.getmtime(report) if os.path.exists(report) else None
+    if not calroute.is_due(mtime, time.time()):
+        return None
+
+    actions: List[str] = []
+    problems: List[str] = []
+    today = clock.today()
+
+    # ---- leg 1: collect. Writes the report file whatever happens, because that file IS the
+    # interval gate — a failing route that never stamped it would retry on every sweep.
+    graph_python = str(getattr(mailreconcile, "GRAPH_PYTHON", "") or "")
+    windows = [calroute.window_for(today)]
+    try:
+        with open(calroute.requests_path(mailreconcile.MAIL_DIR), encoding="utf-8") as handle:
+            windows.extend(w for w in calroute.parse_requests(handle.read())
+                           if w not in windows)
+    except OSError:
+        pass  # absent or unreadable request file is not a finding; the routine window stands
+
+    collected = 0
+    if not graph_python or not os.path.exists(graph_python):
+        problems.append("no graphaccess venv at %s" % (graph_python or "(none configured)"))
+    else:
+        import subprocess
+        for window in windows:
+            try:
+                done = subprocess.run(
+                    [graph_python, os.path.join(paths.root(), "bin", "calendar_dump.py"),
+                     "--window", window],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=900)
+            except (subprocess.TimeoutExpired, OSError) as error:
+                problems.append("collect %s: %s" % (window, type(error).__name__))
+                continue
+            if done.returncode == 0:
+                collected += 1
+                actions.append("collect %s: ok" % window)
+            else:
+                # calendar_dump.py has already written its own `.status-cal-<window>` sentinel
+                # on an unreachable Graph; this line is the sweep-visible half of that.
+                problems.append("collect %s: exit %d" % (window, done.returncode))
+
+    # ---- leg 2: capture, from the files leg 1 just refreshed. Each kind independently: a
+    # calendar failure must not cost the mail capture, and `try_capture` returns None for
+    # "the dump cannot answer right now", which is a normal outcome and not a problem.
+    from lib import maildump
+    role = machine.role()
+    for kind in ("calendar", "mail-triage"):
+        try:
+            built = maildump.try_capture(kind, today, role)
+        except Exception as error:  # a capture must never sink the sweep
+            problems.append("capture %s: %s" % (kind, type(error).__name__))
+            continue
+        if built is None:
+            actions.append("capture %s: dump not usable this tick" % kind)
+        else:
+            actions.append("capture %s: %s (%s record(s))"
+                           % (kind, built.get("outcome", "?"),
+                              (built.get("evidence") or {}).get("actual_count", "?")))
+
+    payload = {"ran_at": clock.now(), "windows": windows, "collected": collected,
+               "problems": problems, "actions": actions}
+    try:
+        os.makedirs(os.path.dirname(report), exist_ok=True)
+        with open(report, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+    except OSError as error:
+        problems.append("report: %s" % error)
+
+    detail = "%d/%d window(s) collected, both captures attempted" % (collected, len(windows))
+    if problems:
+        detail += "; %d problem(s)" % len(problems)
+    return Result("sense-files", _mail_dir(), FLAGGED if problems else SYNCED, detail,
+                  actions[:20] + problems[:20])
+
+
 def claude_config_step(dry_run: bool) -> Result:
     """Back up ~/.claude into the repo, and converge CLAUDE.md where that is provably safe.
 
@@ -1504,7 +1609,8 @@ def declared_remote_audit(entries) -> RemoteAudit:
 def enrollment_state(entries) -> Tuple[List[str], List[str], Dict[str, List[str]]]:
     """(enrolled, unenrolled, conflicts) for the checkouts present on this machine.
 
-    Report-only, and it exists chiefly so `lib/enroll.py` has a production caller at all. That
+    Stamps unstamped checkouts (ENROLL_WIRE_SWEEP_TO_STAMP_NEW_CLONES) unless a duplicate claim
+    exists or LODESTAR_NO_AUTO_ENROLL is set; it exists chiefly so `lib/enroll.py` has a production caller at all. That
     module shipped with thirteen passing tests and nothing calling it, and not one checkout was
     stamped — the failure mode CLAUDE.md names in capitals, because green tests plus no caller
     is indistinguishable from a working feature.
@@ -1513,6 +1619,10 @@ def enrollment_state(entries) -> Tuple[List[str], List[str], Dict[str, List[str]
     ones: a `cp -R` duplicate normally sits beside the real checkout under a name the registry
     has never heard of, and that is precisely the case worth surfacing.
     """
+    try:
+        found = enroll.conflicts([path for path, _ in skillclone.checkouts()])
+    except Exception:
+        found = {}
     enrolled = []  # type: List[str]
     unenrolled = []  # type: List[str]
     for entry in entries:
@@ -1521,14 +1631,16 @@ def enrollment_state(entries) -> Tuple[List[str], List[str], Dict[str, List[str]
             continue
         if not entry.repo_id:
             continue
-        if enroll.read_stamp(path) == entry.repo_id:
+        existing = enroll.read_stamp(path)
+        # A fresh clone carries no stamp: stamp it here (local `git config`, no network). A
+        # DIFFERENT existing stamp, or any live duplicate claim, stays report-only.
+        if not existing and not found and not os.environ.get("LODESTAR_NO_AUTO_ENROLL"):
+            if enroll.stamp(path, entry.repo_id):
+                existing = entry.repo_id
+        if existing == entry.repo_id:
             enrolled.append(entry.name)
         else:
             unenrolled.append(entry.name)
-    try:
-        found = enroll.conflicts([path for path, _ in skillclone.checkouts()])
-    except Exception:
-        found = {}
     return sorted(enrolled), sorted(unenrolled), found
 
 
@@ -1791,7 +1903,7 @@ def report(results: List[Result], our_role: str, dry_run: bool,
     lines.append("Reported only in this phase. These are contradictions in the merged "
                  "registry, `machines.md` and tombstones — the checks that will gate "
                  "rename/rehome/retire once those act (see "
-                 "`docs/superpowers/specs/2026-09-30-repo-lifecycle-design.md` §3D).")
+                 "`design/specs/2026-09-30-repo-lifecycle-design.md` §3D).")
     lines.append("")
     all_faults = desired_state_faults or []
     blocking_faults = validate.blocking(all_faults)
@@ -1848,8 +1960,9 @@ def report(results: List[Result], our_role: str, dry_run: bool,
         lines.append("")
         lines.append("Which checkouts carry their registry `Id` as a `lodestar.id` stamp. A "
                      "stamp asserts enrollment, never ownership — a directory copy copies it, "
-                     "which is why a duplicate claim is reported rather than resolved. Run "
-                     "`bin/enroll_checkouts.py` to stamp the unenrolled.")
+                     "which is why a duplicate claim is reported rather than resolved. The sweep "
+                     "stamps fresh clones itself; a listed name here has a different stamp or "
+                     "a duplicate claim, so run `bin/enroll_checkouts.py` to see why.")
         lines.append("")
         lines.append("- enrolled: **%d**" % len(enrolled))
         if unenrolled:
@@ -2229,6 +2342,18 @@ def _sweep(args):
         except Exception as error:
             results.append(Result("mail-reconcile", _mail_dir(), FLAGGED,
                                   "unexpected error: %s" % error, []))
+        # 🔴 BEFORE sweep(), and AFTER the mail census: the census repairs mail files, and the
+        # capture leg below reads the archive, so a capture written before the repair would
+        # cite files the same pass was about to change. Same reason the census itself runs
+        # here. Captures are gitignored, but the calendar files this collects live in
+        # ~/dev/Mail, which the sweep commits and pushes in this very pass.
+        try:
+            sense_result = sense_files_step(args.dry_run)
+            if sense_result is not None:
+                results.append(sense_result)
+        except Exception as error:
+            results.append(Result("sense-files", _mail_dir(), FLAGGED,
+                                  "unexpected error: %s" % error, []))
     try:
         conversations_result = conversations_step(entries, args.dry_run)
         if conversations_result is not None:
@@ -2243,6 +2368,21 @@ def _sweep(args):
     fetch_state = load_fetch_state()
     results.extend(sweep(entries, our_role, args.quiescence, args.dry_run,
                          fetch_state, now, watchdog))
+
+    # Shared awareness (owner, 2026-11-06: "This should be true across all my computers"): the
+    # sweep just pulled the private store, so rebuild this machine's derived lists (TRIAGE deck,
+    # morning, digest, stopping plan) from the synced ledger. A retirement or a press made on
+    # another machine is gone here within one sweep. Deterministic, no model, never fatal; only
+    # from the real checkout (a fixture-root test must not touch the live lists).
+    if not args.dry_run and os.path.realpath(paths.root()) == os.path.realpath(
+            os.path.expanduser("~/dev/Lodestar")):
+        try:
+            from lib import derived
+            res = derived.refresh()
+            line = derived.dm_line(res)
+            print("derived lists: rebuilt %d%s" % (len(res["rebuilt"]), "; " + line if line else ""))
+        except Exception as error:  # noqa: BLE001
+            print("derived lists: step failed, ignored: %s" % error, file=sys.stderr)
 
     # GitHub Issues STATE refresh (owner, 2026-10-23): one pilot project per run, throttled,
     # pause-aware, AFTER the sweep so a clean tree lets the helper commit its export. Never
@@ -2337,6 +2477,9 @@ def _sweep(args):
         # this line's freshness is what tells a statusline the sweep is still running. Keyed
         # to this sweep completing, so a re-stamp every sweep is the point, not redundancy.
         heartbeat.write_line()
+        # This machine's network addresses into the private store (lib/hostaddr.py): only on
+        # change or every 6 h, never raises. The sweep's own private pass commits and pushes it.
+        hostaddr.emit()
 
     try:
         stranded = stranded_checkouts(registry.entries(role=our_role, key=machine.key()),

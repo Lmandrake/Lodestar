@@ -97,18 +97,23 @@ class TestAppend(JournalTest):
         path = self._append("lodestar", "handoff", note="where the work stands")
         self.assertTrue(os.path.exists(path))
 
-    def test_a_handoff_does_not_reopen_or_close_a_loop(self):
-        """It records a moment, never a state change: derive must leave state alone and only
-        move last_touch, the same way `run` does."""
-        from lib import loops
-        events = [
-            {"ts": "2026-09-15T10:00:00.000000-07:00", "loop": "x", "event": "close",
-             "state": "closed"},
-            {"ts": "2026-09-15T11:00:00.000000-07:00", "loop": "x", "event": "handoff"},
-        ]
-        derived = loops.derive(events)
-        self.assertEqual(derived["x"]["state"], "closed",
-                         "a handoff must not resurrect a closed loop")
+    def test_a_handoff_records_a_moment_and_carries_no_state(self):
+        """Was `test_a_handoff_does_not_reopen_or_close_a_loop`, which asserted via
+        `loops.derive` that a handoff left a closed loop closed. `derive` reconstructed loop
+        frontmatter from the journal and was retired with the loop on 2026-11-10
+        (design/plans/2026-11-10-retire-loops.md); nothing re-derives state from events now.
+
+        What outlives it: a `handoff` is a MOMENT, not a transition. The event must carry no
+        state field of its own, so no future consumer can read one out of it -- which is the
+        same reason the type was safe to add in the first place.
+        """
+        import json
+        path = self._append("lodestar", "handoff", note="where the work stands")
+        with open(path, encoding="utf-8") as fh:
+            record = json.load(fh)
+        self.assertEqual(record["event"], "handoff")
+        self.assertNotIn("state", record)
+        self.assertNotIn("spent", record)
 
     def test_every_event_gets_a_unique_filename(self):
         # This is the whole conflict-free premise: same loop, same second, same machine.

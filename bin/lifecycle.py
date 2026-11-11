@@ -10,8 +10,8 @@ A lifecycle converger with no caller would be the third. `bin/sync.py`'s Lifecyc
 the unattended caller; this file is the operator's.
 
     lifecycle.py propose --kind rename --id opencodecli \
-        --old ~/dev/OpenCodeCLI --new ~/dev/DispatchOpenCode --machines all
-    lifecycle.py approve rename-opencodecli-20260930      # the origin gate — asks once
+        --old ~/dev/OldName --new ~/dev/NewName --machines all
+    lifecycle.py approve rename-oldname-YYYYMMDD      # the origin gate — asks once
     lifecycle.py status
     lifecycle.py converge --dry-run                       # then without it
 

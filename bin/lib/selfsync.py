@@ -76,10 +76,16 @@ def receive(root: Optional[str] = None) -> Tuple[bool, str]:
     return True, "fast-forwarded %d" % counts[1]
 
 
-# The board's own artifacts. touch/close/board stage only these, because this repo is
+# The board's own artifacts. A board command stages only these, because this repo is
 # simultaneously the board *and* the source of the tooling that maintains it -- an
 # unscoped `add -A` swept in-flight source edits into commits titled "touch <loop>".
-BOARD_PATHS = ("loops", "journal", "BOARD.md")
+#
+# 🔴 `loops` left 2026-11-10 with the loop retirement, and leaving it out FREEZES the archive:
+# the 91 files stay on disk and in history, but no automatic commit can ever add to or amend
+# them again. Putting it back would let any sweep-adjacent caller auto-commit a stray edit to
+# a retired file. `proseguard` below still inspects `loops/` — the employer prose boundary is a
+# ruling, not loop machinery, so the archive must not be able to sprout new prose either.
+BOARD_PATHS = ("journal", "BOARD.md")
 
 
 def commit_and_push(

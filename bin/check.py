@@ -14,8 +14,6 @@ when it flags a repo, so a flagged row is escalated to WARN here rather than rea
 |---|---|---|
 | launchagents | `launchctl list <label>` | — |
 | machine liveness | `heartbeat.facts()` | in-process, read-only |
-| `board.py --check` | Phase 0 primitive | board snapshot |
-| `board.py --rebuild` round-trip | Phase 0 🔒 gate | board snapshot |
 | `airlock.py` | Phase 2 linter | the real board (read-only) |
 | the sync sweep | the live agent's own result, else `sync.py --dry-run` | board snapshot |
 | claudeconf captures | `claudeconf.pending_captures()` | in-process, read-only |
@@ -111,6 +109,8 @@ to the board, strictly less work than the sweep it is checking, and there is no 
 import argparse
 import filecmp
 import os
+import plistlib
+import xml.parsers.expat as expat
 import shutil
 import subprocess
 import sys
@@ -176,7 +176,7 @@ def worst(*verdicts: str) -> str:
 # What a board snapshot needs to be a faithful stand-in for the checks that write.
 # `claude/global` is here because sync.py's ~/.claude step renders CLAUDE.md from it to
 # report drift; `claude/snapshot` is 550 KB of backup and is deliberately not copied.
-SNAPSHOT_PATHS = ("machines.md", "BOARD.md", "PAUSE", "untracked-scope.json", "loops", "journal", "sync",
+SNAPSHOT_PATHS = ("machines.md", "BOARD.md", "PAUSE", "untracked-scope.json", "journal", "sync",
                   os.path.join("claude", "global"))
 
 # Required = its absence has an operational consequence worth a WARN. Optional = absence is
@@ -448,7 +448,30 @@ def launchagent_check(launchctl: Callable[[str], Tuple[int, str]]) -> Check:
     return Check("launchagents", HEALTH, worst, " · ".join(details))
 
 
-def liveness_check() -> Check:
+SYNC_PLIST = os.path.expanduser("~/Library/LaunchAgents/com.lodestar.sync.plist")
+DEFAULT_SWEEP_INTERVAL = 127
+
+
+def sweep_interval(plist: str = SYNC_PLIST) -> int:
+    """Seconds between sweeps, read from the installed plist's StartInterval (else 127).
+
+    🔴 `ExpatError` is caught because `plutil -lint` is NOT enough validation for a plist a
+    Python tool reads. XML forbids a bare `--` inside a comment; Apple's parser tolerates one
+    and expat does not, so three of our own plists lint clean and still raise here (measured
+    2026-11-10, ticket `LODESTAR_REPAIR_PLISTS_PLUTIL_SAID_OK_EXPAT_SAID_NO`). It was
+    uncaught, so one malformed comment in a header took out the entire health surface before
+    it printed a single row. A reader of a file someone else installs degrades; it never dies.
+    """
+    try:
+        with open(plist, "rb") as handle:
+            value = plistlib.load(handle).get("StartInterval")
+        return int(value) if value and int(value) > 0 else DEFAULT_SWEEP_INTERVAL
+    except (OSError, ValueError, TypeError, plistlib.InvalidFileException,
+            expat.ExpatError):
+        return DEFAULT_SWEEP_INTERVAL
+
+
+def liveness_check(interval: Optional[int] = None) -> Check:
     """Is the sync sweep actually producing output, not merely loaded?
 
     `launchctl` says the job exists and last exited 0; a job that exits 0 doing nothing looks
@@ -460,9 +483,11 @@ def liveness_check() -> Check:
         return Check("sync freshness", HEALTH, WARN, "no SYNC.md — the sweep has not run here")
     age = time.time() - os.stat(report).st_mtime
     detail = "SYNC.md written %s ago" % _human(age)
-    # The sweep runs every 127 s; three cadences of silence is a wedge, not jitter.
-    return Check("sync freshness", HEALTH, OK if age <= 400 else WARN, detail,
-                 hint="" if age <= 400 else "expected within ~2 min; check "
+    # Three cadences of silence is a wedge, not jitter; the cadence is the installed plist's.
+    interval = interval or sweep_interval()
+    limit = max(400, 3 * interval)
+    return Check("sync freshness", HEALTH, OK if age <= limit else WARN, detail,
+                 hint="" if age <= limit else "expected within ~%s; check " % _human(interval)
                                             + ("`journalctl -u lodestar-sync`"
                                                if sys.platform.startswith("linux")
                                                else "~/Library/Logs/lodestar-sync.err"))
@@ -603,9 +628,11 @@ def machines_check(facts: Optional[Callable[[], Dict]] = None,
                                 ("no other machine is registered in machines.md — nothing to "
                                  "measure", stray) if part), output)
 
-    never, unreadable, quiet, fresh = [], [], [], []
+    never, unreadable, quiet, fresh, exempt = [], [], [], [], []
     for row in known:
-        if not row.get("as_of"):
+        if row.get("liveness_exempt"):
+            exempt.append(row)      # machines.md `Liveness: exempt` — no sweep by design
+        elif not row.get("as_of"):
             never.append(row)
         elif row.get("age_seconds") is None:
             unreadable.append(row)
@@ -623,6 +650,9 @@ def machines_check(facts: Optional[Callable[[], Dict]] = None,
                 % (row.get("role"), row.get("key"), row.get("as_of")) for row in unreadable]
     phrases += ["%s %s %s ago" % (row.get("role"), row.get("key"), _age(row))
                 for row in fresh]
+
+    phrases += ["%s %s exempt (%s)" % (row.get("role"), row.get("key"),
+                                       row.get("liveness_exempt")) for row in exempt]
 
     detail = " · ".join(part for part in
                         ["%d other machine(s), %d seen within %s"
@@ -1308,35 +1338,6 @@ def tool_check(name: str, tier: str, argv: Sequence[str], run, root: Optional[st
     return Check(name, tier, verdict, detail, output, hint)
 
 
-def board_roundtrip_check(run, real_root: str, snapshot: str) -> Check:
-    """🔒 The Phase 0 gate: does the journal still reconstruct every loop's state?
-
-    Run in the snapshot, then the rebuilt loop files and `BOARD.md` are compared byte-for-byte
-    against the real ones. A difference means the journal and the loop files have drifted —
-    which is the one failure that would make the whole event-sourced recovery story false.
-    """
-    code, output, timed_out = run(["bin/board.py", "--rebuild"], root=snapshot,
-                                  timeout=DEFAULT_TIMEOUT)
-    if timed_out:
-        return Check("board.py --rebuild round-trip", HEALTH, FAIL,
-                     "timed out after %ds" % DEFAULT_TIMEOUT, output)
-    if code != 0:
-        return Check("board.py --rebuild round-trip", HEALTH, FAIL,
-                     summary_line(output), output)
-    drifted = differing_files(real_root, snapshot, ["loops", "BOARD.md"])
-    rebuilt = summary_line(output, ("rebuilt",))
-    if drifted:
-        shown = ", ".join(drifted[:4])
-        if len(drifted) > 4:
-            shown += " and %d more" % (len(drifted) - 4)
-        return Check("board.py --rebuild round-trip", HEALTH, FAIL,
-                     "%d file(s) do NOT round-trip: %s" % (len(drifted), shown), output,
-                     hint="loop state and the journal disagree; read the diff before "
-                          "trusting `board.py --rebuild` as a recovery path")
-    return Check("board.py --rebuild round-trip", HEALTH, OK,
-                 "%s; loops/ and BOARD.md byte-identical" % rebuilt, output)
-
-
 # --- the consolidated verdict ------------------------------------------------------------
 
 
@@ -1505,10 +1506,15 @@ def main(argv=None, run=None, launchctl=None, stream=None, report_file=None,
             # `liveness_check` answers "is the sweep alive HERE"; this one answers it for
             # every other machine, which nothing else on this box can see (LAPTOP_PARITY §4).
             machines_check(machines),
-            tool_check("board.py --check", HEALTH, ["bin/board.py", "--check"],
-                       run, snapshot, DEFAULT_TIMEOUT, ("BOARD.md",),
-                       hint="run `bin/board.py` to regenerate it"),
-            board_roundtrip_check(run, real_root, snapshot),
+            # The two board rows -- `board.py --check` and the 🔒 Phase 0 `board.py --rebuild`
+            # round-trip -- were retired 2026-11-10 with the loop concept
+            # (design/plans/2026-11-10-retire-loops.md). The gate asked "does the journal still
+            # reconstruct every loop's frontmatter byte-for-byte?", which was the one check
+            # that made the event-sourced recovery story true. There is no loop frontmatter to
+            # reconstruct now, so the question has no subject rather than a passing answer.
+            # 🔑 What is NOT retired: the journal itself, and the two things that still prove it
+            # readable -- `journal.load()` reports unreadable event files as `problems`, and the
+            # prose-boundary rows below still guard every path under `journal/`.
             tool_check("airlock.py", HEALTH, ["bin/airlock.py"], run, real_root,
                        DEFAULT_TIMEOUT, ("error(s)", "airlock clean")),
             # Reads ~/dev/.lodestar/sync-status.json BEFORE any dry run of its own can

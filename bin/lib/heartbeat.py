@@ -254,6 +254,10 @@ def machines(machines_path: Optional[str] = None) -> List[Dict[str, Any]]:
         table = machine.roles(machines_path)
     except (OSError, ValueError):
         table = {}
+    try:
+        exempt = machine.liveness_exemptions(machines_path)
+    except (OSError, ValueError):
+        exempt = {}
     seen = last_seen()
 
     rows = []  # type: List[Dict[str, Any]]
@@ -265,6 +269,7 @@ def machines(machines_path: Optional[str] = None) -> List[Dict[str, Any]]:
             "key": key,
             "role": table.get(key) or str(record.get("machine") or "?"),
             "known": key in table,
+            "liveness_exempt": exempt.get(key),
             "as_of": as_of,
             "age_seconds": age,
             # Unknown age never reads as current — same rule as lib/status._source.

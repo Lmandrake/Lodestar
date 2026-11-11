@@ -48,11 +48,15 @@ def state_file(*parts: str) -> str:
 
 
 def loops_dir() -> str:
+    """The retired loop archive. Kept so a reader can still find the 91 closed files.
+
+    The loop concept was retired 2026-11-10 (design/plans/2026-11-10-retire-loops.md) and
+    `lib/loops.py` is gone. Nothing in the running system reads this directory: `loops` also
+    left `selfsync.BOARD_PATHS` and the shadow runner's write allowlist, so no automatic commit
+    can add to or amend the archive. `loop_file` went with the library -- there is no longer a
+    caller that addresses one loop by id.
+    """
     return os.path.join(root(), "loops")
-
-
-def loop_file(loop_id: str) -> str:
-    return os.path.join(loops_dir(), loop_id + ".md")
 
 
 def journal_dir() -> str:

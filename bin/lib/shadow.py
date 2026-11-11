@@ -5,7 +5,7 @@ validated — with the tip deliberately blunted. In shadow mode the live behavio
 bookkeeping: claim requests at-most-once, write proposals, log, journal, render a digest, and
 report the sensing verdict. No domain action executes at all.
 
-See docs/superpowers/specs/2026-09-01-lodestar-phase-3-shadow-design.md. Four of its
+See design/specs/2026-09-01-lodestar-phase-3-shadow-design.md. Four of its
 decisions are load-bearing here and are cheap to break by accident:
 
 **D-L · deterministic and LLM-free.** Nothing in this module or its CLI calls a model.
@@ -109,9 +109,11 @@ WRITE_ALLOWLIST = (
     "airlock/done/",          # claimed requests + their logs
     "airlock/requests/",      # removals only: the claim renames out of here
     "airlock/DIGEST.md",      # the digest
-    "BOARD.md",               # one summary line
     "journal/",               # run events
-    "loops/%s.md" % LOOP_ID,  # last_touch only
+    # 🔴 `BOARD.md` and `loops/<id>.md` left this allowlist 2026-11-10 with the loop retirement
+    # (design/plans/2026-11-10-retire-loops.md). This is a WRITE BOUNDARY, so a shorter list is
+    # a stronger guarantee: the unattended runner can no longer write either, and
+    # `allowed_write` now refuses them. Do not re-add a path here to make a test pass.
 )
 
 

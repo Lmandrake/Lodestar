@@ -1,6 +1,6 @@
 """ACTIONS v1: parse, lint, allocate ids, migrate v0 lists, render BOARD.md. Deterministic Python.
 
-Spec: docs/superpowers/specs/2026-10-13-project-actions-design.md §4-§6 (branch
+Spec: design/specs/2026-10-13-project-actions-design.md §4-§6 (branch
 `project-actions-design`), ruled by D27 (2026-10-14) and D29 (2026-10-15, every project one
 ACTIONS.md). `todolists.parse` hands a file to `parse_v1` when its front matter says `actions: v1`;
 a file without that is v0 and keeps parsing exactly as before.

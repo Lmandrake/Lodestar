@@ -9,6 +9,15 @@ real meeting dates, staffing levels). Paraphrase and context cannot be matched b
     publish.py review <repo>      # after `scan` passes; writes <publish>/reviews/<repo>/<tree>.json
     publish.py rule <repo> [--owner-said TEXT]          # writes <tree>.ruling.json beside it
 
+Incremental read (PUBLISH_REVIEW_SHRINK_FULL_REREADS, owner 2026-11-04: "You're wasting a lot of
+tokens on these public scans"): the model reads only files whose path or content differs from the
+last released tree; every other file carries forward the verdict of the release that shipped it
+(CLEAN, or ruled over). Fail-closed to a full read: no prior release, the staging clone's HEAD is
+not that release's recorded commit and tree, its receipt is missing or not the one that gated it,
+or the manifest, the names/terms/hosts lists or the review prompt differ from that release's.
+`--full` forces a whole-tree read. The receipt names the files read and, per inherited file, the
+release whose read covered it.
+
 A ruling binds tree_hash, manifest_sha256, answer_sha256 and the review id of the receipt it rules
 over, so a rebuild or a new review lapses it. Only a well-formed FINDINGS receipt can be ruled
 over: a transport or parse failure writes no receipt, and CLEAN needs no ruling.
@@ -23,6 +32,7 @@ a REFUSAL, never a pass. The answer is kept in the private store, because it quo
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shlex
@@ -36,13 +46,15 @@ from typing import Dict, List, Optional
 try:
     from lib.publish import manifest as manifest_mod
     from lib.publish import scan as scan_mod
-    from lib.publish.common import (PublishError, is_binary, private_dir, read_json, tree_dir,
-                                    tree_hash, walk_tree, write_json)
+    from lib.publish.common import (PublishError, is_binary, materialize, private_dir, read_json,
+                                    sha256_file, staging_dir, tree_dir, tree_hash, walk_tree,
+                                    write_json)
 except ImportError:  # pragma: no cover
     from publish import manifest as manifest_mod  # type: ignore
     from publish import scan as scan_mod  # type: ignore
-    from publish.common import (PublishError, is_binary, private_dir,  # type: ignore
-                                read_json, tree_dir, tree_hash, walk_tree, write_json)
+    from publish.common import (PublishError, is_binary, materialize,  # type: ignore
+                                private_dir, read_json, sha256_file, staging_dir, tree_dir,
+                                tree_hash, walk_tree, write_json)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 REVIEW_ENV = "PUBLISH_REVIEW_CMD"
@@ -155,13 +167,16 @@ def _blocks(rel: str, data: bytes, limit: int):
             return
 
 
-def slices(root: str, limit: int = SLICE_CHARS):
-    """([prompt body text per slice], binaries a text model cannot read)."""
+def slices(root: str, limit: int = SLICE_CHARS, only: Optional[set] = None):
+    """([prompt body text per slice], binaries a text model cannot read). `only`: the relative
+    paths to inline (an incremental read); None means every file."""
     out: List[str] = []
     cur: List[str] = []
     size = 0
     binaries: List[str] = []
     for rel, full in walk_tree(root):
+        if only is not None and rel not in only:
+            continue
         with open(full, "rb") as fh:
             data = fh.read()
         if is_binary(data):
@@ -267,10 +282,12 @@ def ask_slice(cmd: List[str], prompt: str, attempts: int = ATTEMPTS):
 
 
 def read_tree(tree: str, repo: str, cmd: List[str], prompt: str = PROMPT,
-              limit: int = SLICE_CHARS, attempts: int = ATTEMPTS):
+              limit: int = SLICE_CHARS, attempts: int = ATTEMPTS, only: Optional[set] = None):
     """The cold read itself, shared by `review` and the prompt evaluation:
     ([answer per slice], total findings, [attempts used per slice], unread binaries)."""
-    parts, binaries = slices(tree, limit)
+    if only is not None and not only:
+        return [], 0, [], []       # nothing changed that a reader could see: no model call
+    parts, binaries = slices(tree, limit, only)
     answers, tries, total = [], [], 0
     for i, body in enumerate(parts, 1):
         full = "%s\nSlice %d of %d. Repo: %s.\n\n%s" % (prompt, i, len(parts), repo, body)
@@ -281,7 +298,111 @@ def read_tree(tree: str, repo: str, cmd: List[str], prompt: str = PROMPT,
     return answers, total, tries, binaries
 
 
-def review(repo: str, store: Optional[str] = None, command: Optional[List[str]] = None) -> Dict:
+def _last_release(publish: str, repo: str) -> Optional[Dict]:
+    path = os.path.join(publish, "releases.jsonl")
+    last = None
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(rec, dict) and rec.get("repo") == repo:
+                    last = rec
+    return last
+
+
+def _file_hashes(root: str) -> Dict[str, str]:
+    return {rel: sha256_file(full) for rel, full in walk_tree(root)}
+
+
+def _base_files(repo: str, rel_rec: Dict) -> Optional[Dict[str, str]]:
+    """{path: sha256} of the last released tree, read from the staging clone's HEAD, or None
+    unless that HEAD is exactly the release's recorded commit and tree."""
+    stage = staging_dir(repo)
+    if not os.path.isdir(os.path.join(stage, ".git")):
+        return None
+    try:
+        from lib.publish.common import git
+    except ImportError:  # pragma: no cover
+        from publish.common import git  # type: ignore
+    head = git(stage, "rev-parse", "--verify", "-q", "HEAD^{commit}", check=False)
+    head = head.decode().strip()
+    if not head or head != rel_rec.get("public_commit"):
+        return None
+    with tempfile.TemporaryDirectory(prefix="publish-review-base-") as tmp:
+        dest = os.path.join(tmp, "tree")
+        os.makedirs(dest)
+        materialize(stage, head, dest)
+        if tree_hash(dest) != rel_rec.get("tree_hash"):
+            return None
+        return _file_hashes(dest)
+
+
+def plan(repo: str, publish: str, tree: str, th: str, man_sha: str, lists_sha: Dict,
+         full: bool = False) -> Dict:
+    """What the cold read must cover. Incremental only when every basis matches the last
+    release; any doubt is a full read, with the reason recorded."""
+    current = _file_hashes(tree)
+    everything = {"mode": "full", "read": sorted(current), "inherited": {}, "inherited_from": [],
+                  "deleted": [], "base_tree_hash": None}
+
+    def whole(reason: str) -> Dict:
+        return dict(everything, full_reason=reason)
+    if full:
+        return whole("--full requested")
+    rel = _last_release(publish, repo)
+    if not rel:
+        return whole("first release")
+    base_th = rel.get("tree_hash")
+    if not base_th or base_th == th:
+        return whole("tree is the released tree itself")
+    if rel.get("manifest_sha256") != man_sha:
+        return whole("manifest changed since the last release")
+    base_scan = read_json(rel.get("scan_report") or "") or {}
+    if (base_scan.get("tree_hash") != base_th
+            or (base_scan.get("lists") or {}).get("sha256") != lists_sha):
+        return whole("names/terms/hosts lists changed since the last release (or its scan "
+                     "report is unreadable)")
+    base_rec = read_json(receipt_path(publish, repo, base_th))
+    if (not base_rec or base_rec.get("tree_hash") != base_th
+            or base_rec.get("manifest_sha256") != man_sha
+            or base_rec.get("answer_sha256") != rel.get("cold_read_answer_sha256")
+            or base_rec.get("verdict") != rel.get("cold_read")):
+        return whole("the last release's cold-read receipt is missing or not the one that gated it")
+    if base_rec.get("prompt_sha256") != prompt_sha256():
+        return whole("review prompt changed since the last release")
+    if not (rel.get("cold_read") == "CLEAN" or rel.get("owner_ruling")):
+        return whole("the last release went out without a CLEAN read or a ruling")
+    base_files = _base_files(repo, rel)
+    if base_files is None:
+        return whole("the staging clone's HEAD is not the last release's recorded commit and tree")
+    here = {"tree_hash": base_th, "released_at": rel.get("at"),
+            "public_commit": rel.get("public_commit"), "review_id": base_rec.get("review_id"),
+            "cold_read": rel.get("cold_read"), "findings": rel.get("cold_read_findings"),
+            "ruled": bool(rel.get("owner_ruling"))}
+    older = {o.get("tree_hash"): o for o in base_rec.get("inherited_from") or []}
+    base_inh = base_rec.get("inherited") or {}
+    read, inherited, used = [], {}, {}
+    for path, digest in sorted(current.items()):
+        if base_files.get(path) != digest:
+            read.append(path)
+            continue
+        origin = base_inh.get(path, base_th)
+        src = here if origin == base_th else older.get(origin)
+        if src is None:         # a chain we cannot account for: read it again
+            read.append(path)
+            continue
+        inherited[path] = origin
+        used[origin] = src
+    return {"mode": "incremental", "read": read, "inherited": inherited,
+            "inherited_from": [used[k] for k in sorted(used)],
+            "deleted": sorted(set(base_files) - set(current)), "base_tree_hash": base_th}
+
+
+def review(repo: str, store: Optional[str] = None, command: Optional[List[str]] = None,
+           full: bool = False) -> Dict:
     publish = private_dir(store)
     man = manifest_mod.load(repo, publish)
     tree = tree_dir(repo)
@@ -291,14 +412,22 @@ def review(repo: str, store: Optional[str] = None, command: Optional[List[str]] 
     rpath, report = scan_mod.latest_report(publish, repo)
     if not report or report.get("tree_hash") != th or not report.get("passed"):
         raise PublishError("review follows a PASSING scan of this exact tree; run scan first")
+    lists_sha = scan_mod.load_lists(publish).digests
+    scope = plan(repo, publish, tree, th, man.sha256, lists_sha, full)
     cmd = command or default_command()
-    answers, total, tries, binaries = read_tree(tree, repo, cmd)
+    only = None if scope["mode"] == "full" else set(scope["read"])
+    answers, total, tries, binaries = read_tree(tree, repo, cmd, only=only)
     joined = "\n".join(answers)
     record = {"repo": repo, "tree_hash": th, "manifest_sha256": man.sha256, "slices": len(tries),
               "attempts": tries, "prompt_version": PROMPT_VERSION, "prompt_sha256": prompt_sha256(),
               "verdict": "CLEAN" if total == 0 else "FINDINGS", "findings": total,
               "binaries_unread": binaries, "reviewed_at": _now(), "review_id": uuid.uuid4().hex,
-              "answer_sha256": hashlib.sha256(joined.encode()).hexdigest()}
+              "answer_sha256": hashlib.sha256(joined.encode()).hexdigest(),
+              "lists_sha256": lists_sha, "mode": scope["mode"], "files_read": scope["read"],
+              "inherited": scope["inherited"], "inherited_from": scope["inherited_from"],
+              "deleted": scope["deleted"], "base_tree_hash": scope["base_tree_hash"]}
+    if scope.get("full_reason"):
+        record["full_reason"] = scope["full_reason"]
     base = receipt_path(publish, repo, th)
     os.makedirs(os.path.dirname(base), exist_ok=True)
     stale = os.path.join(os.path.dirname(base), "%s.ruling.json" % th)
@@ -388,6 +517,9 @@ def require(repo: str, th: str, manifest_sha: str, publish: str) -> Dict:
                            % repo)
     if rec.get("tree_hash") != th or rec.get("manifest_sha256") != manifest_sha:
         raise PublishError("cold-read receipt is for a different tree or manifest; rerun review")
+    if rec.get("mode") == "incremental" and rec.get("prompt_sha256") != prompt_sha256():
+        raise PublishError("the incremental cold read was made under another review prompt; "
+                           "rerun review")
     if rec.get("verdict") == "CLEAN" and rec.get("findings") == 0:
         return rec
     ruling = read_json(ruling_path(publish, repo, th))

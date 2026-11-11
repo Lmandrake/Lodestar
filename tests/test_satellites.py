@@ -2,7 +2,7 @@
 
 Every fixture builds a fake `home`, `repo_root` and `waypoint_root` under a tempdir so
 `find()` never touches the real `~/.claude/`, this repo's own `claude/snapshot/`, or the
-real `~/dev/Waypoint`. `follow()` mutates only the fixture, never anything real.
+real `~/.config/waypoint`. `follow()` mutates only the fixture, never anything real.
 """
 
 import inspect
@@ -134,7 +134,7 @@ class SatellitesTest(unittest.TestCase):
 class Recorder(object):
     """An injected `runner` that records the argv and returns a canned result.
 
-    No test may start the real Waypoint CLI or touch `~/dev/Waypoint`'s tables — his live shell
+    No test may start the real Waypoint CLI or touch `~/.config/waypoint`'s tables — his live shell
     shortcuts. This is the same shape `purge.delete_remote`'s runner has and for the same
     reason: untestable destructive code stays untested, and untested destructive code is where
     the inert features hide.

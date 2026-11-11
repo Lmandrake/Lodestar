@@ -92,6 +92,83 @@ def _this_machine() -> Tuple[Optional[str], Optional[str]]:
         return None, None
 
 
+def column_count_problems(text: str) -> List[Tuple[int, int, int, str]]:
+    """`(line number, expected, got, first cell)` for every row whose cell count differs
+    from its own table's header.
+
+    The parsers pad or truncate silently, so a 12-column repo row written under the 3-column
+    **Machine paths** heading was read as a path override (Wisps, 2026-11-05). Strict equality.
+    """
+    lines = text.split("\n")
+    found = []  # type: List[Tuple[int, int, int, str]]
+    index = 0
+    while index < len(lines) - 1:
+        if mdtable._is_row(lines[index]) and mdtable._is_separator(lines[index + 1]):
+            expected = len(mdtable._cells(lines[index]))
+            index += 2
+            while index < len(lines) and mdtable._is_row(lines[index]):
+                cells = mdtable._cells(lines[index])
+                if any(cells) and len(cells) != expected:
+                    found.append((index + 1, expected, len(cells), cells[0]))
+                index += 1
+            continue
+        index += 1
+    return found
+
+
+def partition_problems(text: str) -> List[Tuple[int, str, str]]:
+    """`(line number, first cell, reason)` for every data row claimed by neither `entries()`
+    nor `machine_paths()`.
+
+    `entries()` reads ONLY the first contiguous table (`mdtable.parse`). `machine_paths()`
+    reads every table after it whose header names both a `machine` and a `path` column
+    (`mdtable.tables()[1:]`, filtered on header). Those two rules partition the document BY
+    CONSTRUCTION only while every later table has that shape and every row sits inside some
+    header+separator table at all. Neither holds in general: a row-shaped line with no
+    header/separator pair above it (outside any table) is read by neither parser, and a
+    third table whose headers don't happen to say `machine`+`path` is read by neither either
+    -- the same invisibility Wisps suffered (REGISTRY_ENFORCE_SECTION_COLUMN_COUNTS), one
+    level up. `column_count_problems` is a different check: it compares a row's cell count
+    against the header directly above IT, so it has nothing to say about a row with no header
+    above it, or a whole table of the wrong shape.
+
+    "Doubly claimed" cannot occur under the current implementation -- `machine_paths` only
+    ever looks at `tables()[1:]`, so table 0 can never be read twice -- and this function
+    reports no such case; it exists for the "claimed by neither" half, which is real.
+    """
+    lines = text.split("\n")
+    found = []  # type: List[Tuple[int, str, str]]
+    index = 0
+    table_no = 0
+    while index < len(lines) - 1:
+        if mdtable._is_row(lines[index]) and mdtable._is_separator(lines[index + 1]):
+            headers = [cell.lower() for cell in mdtable._cells(lines[index])]
+            claimed_by_entries = table_no == 0
+            claimed_by_machine_paths = (table_no > 0 and "machine" in headers
+                                         and "path" in headers)
+            this_table = table_no
+            index += 2
+            while index < len(lines) and mdtable._is_row(lines[index]):
+                cells = mdtable._cells(lines[index])
+                if any(cells) and not claimed_by_entries and not claimed_by_machine_paths:
+                    found.append((index + 1, cells[0] if cells else "",
+                                  "table #%d (header %r) matches neither entries()'s first "
+                                  "table nor machine_paths()'s machine+path shape"
+                                  % (this_table, headers)))
+                index += 1
+            table_no += 1
+            continue
+        if mdtable._is_row(lines[index]):
+            # A row-shaped line with no header/separator pair above it: not inside any
+            # detected table at all, so neither parser can see it.
+            cells = mdtable._cells(lines[index])
+            if any(cells):
+                found.append((index + 1, cells[0] if cells else "",
+                              "row is not part of any header+separator table"))
+        index += 1
+    return found
+
+
 def machine_paths(text: str) -> Dict[Tuple[str, str], str]:
     """{(repo name, machine): path} from the Machine paths table, if the document has one."""
     found = {}  # type: Dict[Tuple[str, str], str]
@@ -146,11 +223,14 @@ def entries(registry_path: Optional[str] = None, role: Optional[str] = None,
     here = [value for value in (role, key) if value]
 
     result = []
+    from . import untracked
     for row in rows:
         name = row.get("name", "").strip().strip("`")
         raw_path = row.get("path", "").strip().strip("`")
         if not name or not raw_path:
             continue
+        if untracked.is_untracked_path(raw_path) or untracked.is_untracked_name(name):
+            continue  # an untracked project is never swept, recorded or listed (lib/untracked.py)
         for where in here:
             if (name, where.lower()) in overrides:
                 raw_path = overrides[(name, where.lower())]

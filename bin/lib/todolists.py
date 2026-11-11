@@ -1,6 +1,6 @@
 """Read a project's own to-do list (ACTIONS.md, else TODO.md), read-only, for Orders.
 
-Spec: docs/superpowers/specs/2026-10-13-what-now-design.md §2 (project lists are their own
+Spec: design/specs/2026-10-13-what-now-design.md §2 (project lists are their own
 single source of truth; Lodestar never writes one) and §3 (an unowned line is NOT his by
 default). Rulings 2026-10-13: BOARD.md vs ACTIONS.md is undecided, so BOARD.md is never read here.
 

@@ -27,6 +27,7 @@ import ast
 import datetime
 import io
 import os
+import plistlib
 import shutil
 import subprocess
 import tempfile
@@ -37,6 +38,9 @@ import check as check_cmd
 
 
 MACHINES_MD = "| Key | Role |\n|-----|------|\n| test-box | desktop |\n"
+
+EVENT_JSON = ('{"ts": "2026-11-10T09:00:00.000000-08:00", "loop": "lodestar",'
+              ' "event": "touch", "machine": "desktop", "runtime": "cc"}\n')
 
 LOOP_MD = """---
 id: demo
@@ -58,6 +62,35 @@ Body prose, which the journal never carries.
 def check(name, tier=check_cmd.HEALTH, verdict=check_cmd.OK, detail="", output=""):
     return check_cmd.Check(name=name, tier=tier, verdict=verdict, detail=detail,
                            output=output)
+
+
+class SweepIntervalTest(unittest.TestCase):
+    def _plist(self, body):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d)
+        path = os.path.join(d, "x.plist")
+        with open(path, "wb") as handle:
+            plistlib.dump(body, handle)
+        return path
+
+    def test_interval_follows_the_plist(self):
+        self.assertEqual(check_cmd.sweep_interval(self._plist({"StartInterval": 3607})), 3607)
+
+    def test_missing_or_bad_plist_falls_back_to_127(self):
+        self.assertEqual(check_cmd.sweep_interval("/nonexistent/x.plist"), 127)
+        self.assertEqual(check_cmd.sweep_interval(self._plist({})), 127)
+
+    def test_hourly_sweep_is_fresh_at_30_minutes_and_stale_after_three_cadences(self):
+        report = os.path.join(tempfile.mkdtemp(), "SYNC.md")
+        self.addCleanup(shutil.rmtree, os.path.dirname(report))
+        open(report, "w").close()
+        orig = check_cmd.paths.sync_report_file
+        check_cmd.paths.sync_report_file = lambda: report
+        self.addCleanup(setattr, check_cmd.paths, "sync_report_file", orig)
+        for age, verdict in ((1800, check_cmd.OK), (3 * 3607 + 60, check_cmd.WARN)):
+            t = time.time() - age
+            os.utime(report, (t, t))
+            self.assertEqual(check_cmd.liveness_check(3607).verdict, verdict)
 
 
 class VerdictTest(unittest.TestCase):
@@ -833,13 +866,13 @@ class SkillsRowTest(unittest.TestCase):
         self.assertEqual(seen, {"dry_run": True})
 
 
-def hb(key, role, age_seconds, known=True, as_of="2026-09-01T09:00:00-07:00"):
+def hb(key, role, age_seconds, known=True, as_of="2026-09-01T09:00:00-07:00", exempt=None):
     """One row shaped like `heartbeat.machines()` produces them.
 
     Faithful to the real field set rather than trimmed to what `machines_check` reads, so a
     row built here stays a plausible stand-in if the reader starts consulting another field.
     """
-    return {"key": key, "role": role, "known": known,
+    return {"key": key, "role": role, "known": known, "liveness_exempt": exempt,
             "as_of": None if age_seconds is None and as_of is None else as_of,
             "age_seconds": age_seconds,
             "silent": age_seconds is None or age_seconds > 2 * 3600,
@@ -893,6 +926,28 @@ class MachineLivenessRowTest(unittest.TestCase):
         self.assertIn("laptop", entry.detail)
         self.assertIn("other-box", entry.detail)
         self.assertIn("3.0h ago", entry.detail)
+
+    def test_a_liveness_exempt_machine_is_named_exempt_not_warned(self):
+        """machines.md `Liveness: exempt: <reason>`; the same never-seen row without it WARNs."""
+        broken = self.row(hb("bench-box", "bench", None, as_of=None))
+        self.assertEqual(broken.verdict, check_cmd.WARN)
+        entry = self.row(hb("bench-box", "bench", None, as_of=None,
+                            exempt="no sweep by design"))
+        self.assertEqual(entry.verdict, check_cmd.OK)
+        self.assertIn("exempt (no sweep by design)", entry.detail)
+        self.assertNotIn("NEVER", entry.detail)
+
+    def test_machines_md_liveness_cell_parses_to_an_exemption(self):
+        import tempfile, os
+        from lib import machine
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "machines.md")
+            with open(path, "w") as f:
+                f.write("| Key | Role | Liveness | Notes |\n|--|--|--|--|\n"
+                        "| a-box | bench | exempt: no sweep by design | x |\n"
+                        "| b-box | home |  | y |\n")
+            self.assertEqual(machine.liveness_exemptions(path),
+                             {"a-box": "no sweep by design"})
 
     def test_a_peer_quiet_past_the_threshold_warns_and_never_fails(self):
         entry = self.row(hb("other-box", "laptop", 9 * 86400))
@@ -1111,11 +1166,13 @@ class SnapshotTest(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix="lodestar-check-src-")
         self.addCleanup(shutil.rmtree, self.root, True)
-        os.makedirs(os.path.join(self.root, "loops"))
+        os.makedirs(os.path.join(self.root, "journal", "2026-11-10"))
         os.makedirs(os.path.join(self.root, "sync"))
         self.write("machines.md", MACHINES_MD)
         self.write("BOARD.md", "# Board\n")
-        self.write(os.path.join("loops", "demo.md"), LOOP_MD)
+        # Was loops/demo.md until 2026-11-10; `loops` left SNAPSHOT_PATHS with the loop
+        # retirement, so the copy-not-the-original property is pinned on a path still copied.
+        self.write(os.path.join("journal", "2026-11-10", "1-aaaaaa.json"), EVENT_JSON)
         self.write(os.path.join("sync", "registry.md"), "| Name |\n|------|\n")
 
     def write(self, relpath, text):
@@ -1128,18 +1185,21 @@ class SnapshotTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, into, True)
         snapshot = check_cmd.snapshot_board(self.root, into)
         self.assertNotEqual(os.path.realpath(snapshot), os.path.realpath(self.root))
-        self.assertTrue(os.path.exists(os.path.join(snapshot, "loops", "demo.md")))
+        self.assertTrue(os.path.exists(
+            os.path.join(snapshot, "journal", "2026-11-10", "1-aaaaaa.json")))
         self.assertTrue(os.path.exists(os.path.join(snapshot, "machines.md")))
+        # The loop archive is deliberately NOT snapshotted any more.
+        self.assertFalse(os.path.exists(os.path.join(snapshot, "loops")))
 
     def test_writing_into_the_snapshot_leaves_the_original_alone(self):
         into = tempfile.mkdtemp(prefix="lodestar-check-dst-")
         self.addCleanup(shutil.rmtree, into, True)
         snapshot = check_cmd.snapshot_board(self.root, into)
-        with open(os.path.join(snapshot, "loops", "demo.md"), "w",
-                  encoding="utf-8") as handle:
+        event = os.path.join("journal", "2026-11-10", "1-aaaaaa.json")
+        with open(os.path.join(snapshot, event), "w", encoding="utf-8") as handle:
             handle.write("clobbered\n")
-        with open(os.path.join(self.root, "loops", "demo.md"), encoding="utf-8") as handle:
-            self.assertEqual(handle.read(), LOOP_MD)
+        with open(os.path.join(self.root, event), encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), EVENT_JSON)
 
     def test_an_absent_optional_path_is_skipped_rather_than_fatal(self):
         into = tempfile.mkdtemp(prefix="lodestar-check-dst-")
@@ -1479,9 +1539,11 @@ class MainTest(unittest.TestCase):
         self.assertIn("journal is a file", text)
 
     def test_the_board_snapshot_is_cleaned_up(self):
+        # Keyed on sync.py since 2026-11-10: the two board.py rows retired with the loop
+        # concept, but writing checks still run in a snapshot and it must still be removed.
         _code, text, runner = self.run_main()
         snapshots = {root for argv, root, _t in runner.calls
-                     if root and "board.py" in " ".join(argv)}
+                     if root and "sync.py" in " ".join(argv)}
         self.assertTrue(snapshots)
         for path in snapshots:
             self.assertFalse(os.path.exists(path), "%s survived the run" % path)

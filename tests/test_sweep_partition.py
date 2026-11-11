@@ -40,8 +40,15 @@ class IsSourceTest(unittest.TestCase):
             "bin/zap_sheet.py",
             "bin/graph_token_watch.py",
             "docs/ROADMAP.md",
-            "docs/superpowers/plans/2026-09-11-judge-and-zap-sync.md",
+            "design/plans/2026-09-11-judge-and-zap-sync.md",
         ):
+            self.assertSource(path)
+
+    def test_design_specs_and_plans_at_the_root_are_source(self):
+        """The 2026-11-09 ruling moved them out of docs/; they must stay authored-commit only."""
+        for path in ("design/specs/2026-11-09-a-design.md",
+                     "design/plans/2026-11-09-a-plan.md",
+                     "design/measurements/2026-11-09-a-trial.json"):
             self.assertSource(path)
 
     # -- board state: must keep flowing ----------------------------------------------

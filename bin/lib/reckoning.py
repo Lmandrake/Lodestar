@@ -1,6 +1,6 @@
 """The Reckoning — Lodestar's obligation ledger (stage 1).
 
-Spec: docs/superpowers/specs/2026-10-13-kairos-lodestar-obligations-design.md, with Lukas's
+Spec: design/specs/2026-10-13-kairos-lodestar-obligations-design.md, with Lukas's
 rulings of 2026-10-13 at the top of its Decisions section. In one paragraph: Bearing's
 detectors (needs-you, the quiet-cycle judge) and the one-time Kairos import write PROPOSALS; only
 Lukas turns one into an obligation (`accept`) or ends it (`done`, `drop`, `cancel`) — with one
@@ -15,9 +15,9 @@ those lines, never stored. Lodestar (public) holds this code and, at most, ids a
 Four properties a fresh reader must not break:
 
 * **Content lives only on the private host.** `store_root` refuses to write unless EVERY push URL
-  of every remote of the checkout is on the private host (`boundary.host()`). `output_class`
-  decides whether a surface may print titles (a private-only repo) or counts and ids only (anything else, because a
-  github.com session's dialog is rendered into its committed `conversations/`).
+  of every remote of the checkout is on the private host (`boundary.host()`). Screen text is
+  unrestricted (owner ruling 2026-11-08: work item text may show on screen); commits stay guarded
+  by `bin/prose_guard.py` and the hooks, and conversation records live in the private store.
 * **Personal-class content never enters the store** (the reverse leak). Ruling 4 sends it to
   Hestia through her own door; `append` refuses it here, whoever the caller is.
 * **Causality, not wall clock.** A transition names in `supersedes` the state heads it saw. Two
@@ -51,6 +51,14 @@ except ImportError:  # pragma: no cover
     import paths  # type: ignore
 
 ROOT_ENV = "RECKONING_ROOT"
+
+
+def _untracked(record: Dict) -> bool:
+    try:
+        from lib import untracked
+    except ImportError:  # pragma: no cover
+        import untracked  # type: ignore
+    return untracked.item_untracked(record)
 
 
 def private_host():
@@ -339,9 +347,9 @@ def store_root(root: Optional[str] = None) -> str:
 
 
 def output_class(cwd: Optional[str] = None) -> str:
-    """`content` only in a session whose repo pushes solely to the private host; else `counts`."""
-    top = repo_top(cwd or os.getcwd())
-    return "content" if top and private_only(top) else "counts"
+    """Always `content`: work item text may show on screen in any session (owner ruling
+    2026-11-08). Commits stay guarded by bin/prose_guard.py and the hooks (ruling 5)."""
+    return "content"
 
 
 # --------------------------------------------------------------------------- identities
@@ -475,15 +483,34 @@ def _check(event: Dict) -> None:
 
 def append(events: Iterable[Dict], root: Optional[str] = None,
            machine_key: Optional[str] = None, lock_path: Optional[str] = None) -> List[str]:
-    """Append events to THIS machine's file for each event's local date. Returns the paths."""
-    events = list(events)
+    """Append events to THIS machine's file for each event's local date. Returns the paths.
+    Events about an untracked project (lib/untracked.py) are dropped, never written."""
+    events = [e for e in events if not _untracked(e)]
     for event in events:
         _check(event)
     if not events:
         return []
     root = store_root(root)
     with _locked(lock_path):
-        return _append_held(events, root, machine_key)
+        written = _append_held(events, root, machine_key)
+    _nudge_peer(events, written)
+    return written
+
+
+#: events that change what a Companion shows on every machine (lib/peernudge.py)
+NUDGE_EVENTS = ("done", "drop", "cancel", "reopen", "lapse", "accept", "snooze")
+
+
+def _nudge_peer(events: Iterable[Dict], written: Sequence[str]) -> None:
+    """A human/terminal verb reaches the other Mac in seconds, not at the next hourly sweep.
+    Bearing's propose/observe stream is left to the sweep. Never raises, never blocks."""
+    if not any(e.get("ev") in NUDGE_EVENTS for e in events):
+        return
+    try:
+        from lib import peernudge
+    except ImportError:  # pragma: no cover
+        return
+    peernudge.fire(files=written)
 
 
 def _append_held(events: List[Dict], root: str, machine_key: Optional[str] = None) -> List[str]:
@@ -782,8 +809,35 @@ def close_if_satisfied(ob: str, expect_version: str, by: str, note: str,
         seen = sorted(set(rec["heads"]) | set(rec["tips"]))
         event = make_event("done", ob, by, supersedes=seen, note=note[:300] or None,
                            closed_by="outcome-check")
-        _append_held([event], root, machine_key)
+        written = _append_held([event], root, machine_key)
+    _nudge_peer([event], written)
     return {"ob": ob, "state": "done"}
+
+
+AUTO_VERBS = ("done", "drop", "cancel")
+
+
+def close_auto(ob: str, expect_version: str, ev: str, by: str, rule: str, note: str,
+               root: Optional[str] = None, machine_key: Optional[str] = None,
+               lock_path: Optional[str] = None) -> Dict:
+    """The retirement pass's write (bin/lib/retire.py, owner ruling 2026-11-06): one done, drop
+    or cancel whose evidence is `rule` (`auto:<name>`), only if nothing landed on the obligation
+    since `expect_version`. A normal ledger event, so it syncs everywhere and `reopen` undoes it."""
+    if ev not in AUTO_VERBS or not rule.startswith("auto:"):
+        raise Refused("close_auto takes %s with an auto:<rule>" % "/".join(AUTO_VERBS))
+    root = store_root(root)
+    with _locked(lock_path):
+        rec = fold(read_events(root)[0]).get(ob)
+        if rec is None:
+            raise Refused("%s is not in the ledger" % ob)
+        if version(rec) != expect_version:
+            raise Refused("stale: %s changed since it was judged" % ob)
+        if rec["state"] not in ("proposed", "open"):
+            raise Refused("%s is %s; retirement closes only proposed or open" % (ob, rec["state"]))
+        seen = sorted(set(rec["heads"]) | set(rec["tips"]))
+        event = make_event(ev, ob, by, supersedes=seen, note=note[:300] or None, closed_by=rule)
+        _append_held([event], root, machine_key)
+    return {"ob": ob, "state": STATE_OF[ev]}
 
 
 def tick(root: Optional[str] = None, as_of: Optional[datetime] = None, by: str = "",
@@ -827,6 +881,8 @@ def outbox_path() -> str:
 def outbox_put(detection: Dict, path: Optional[str] = None) -> None:
     """Durably queue one detection (machine-local, outside every repo). Idempotent on obs."""
     path = path or outbox_path()
+    if _untracked(detection):
+        return  # an untracked project never enters the Reckoning (lib/untracked.py)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with _locked(path + ".lock"):  # check inside the lock: two producers cannot both append
         _repair_torn(path)
@@ -1074,12 +1130,23 @@ def extract_detection(entry: Dict, action: Dict, filed_to: str = "",
     quote = str(action.get("quote") or "")[:200]
     origin = "extract-history:%s" % action.get("type") if entry.get("history") else \
         "extract:%s" % action.get("type")
+    check = None
+    # A waiting_for's outcome is the OTHER side's reply, never his own ask (the bug
+    # LODESTAR_FIX_WAITING_FOR_CHECK_MET_BY_OWN_ASK, 2026-11-10): counterparty_answered
+    # reads last_in, never last_self, so this can never self-satisfy.
+    if kind == "waiting_for" and thread and entry.get("date"):
+        try:
+            when = parse_at(str(entry["date"])).astimezone(timezone.utc).isoformat(
+                timespec="seconds")
+            check = {"type": "counterparty_answered", "conversation": thread[:300], "after": when}
+        except ValueError:
+            check = None
     return {"obs": obs, "at": at or now_iso(), "action": "propose",
             "class": private_class() if entry.get("class") != "unclassified" else "unclassified",
             "attach_key": "extract|%s|%s" % (thread, fp), "thread": thread,
             "title": what[:200] or "(untitled action)", "kind": kind, "owner": owner,
             "due": action.get("due") or "", "origin": origin, "project": filed_to,
-            "quote": quote,
+            "quote": quote, "check": check,
             "sources": [{"type": source, "thread": thread, "message": message,
                          "link": entry.get("pointer", ""), "from": entry.get("who", ""),
                          "quote": quote}]}

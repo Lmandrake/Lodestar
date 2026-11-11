@@ -23,7 +23,7 @@ import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 try:
     from lib.publish import manifest as manifest_mod
@@ -72,17 +72,38 @@ def _has_head(repo: str) -> bool:
 
 # ---- diff: the human gate ---------------------------------------------------------------------
 
-def _released_tree(repo: str, dest: str) -> Optional[str]:
-    """Materialise the last released tree (the staging clone's HEAD) into `dest`."""
+def _released_tree(repo: str, dest: str, public_remote: str = "") -> Tuple[Optional[str], str]:
+    """Materialise the last released tree into `dest`; return (sha, source).
+
+    Prefers the LOCAL staging clone's HEAD (no network): what `release` itself commits to and
+    what every other caller of this function assumed existed. LODESTAR_FALLBACK_DIFF_BASELINE_TO_PUBLIC_REMOTE
+    (measured 2026-11-09): a machine that has never released/staged `repo` - because every
+    release so far went out from a DIFFERENT machine - has no staging clone at all, and the old
+    code read that absence as "no prior release", printing a diff against nothing (every file
+    insertion) for what was really a small delta. `source="none"` keeps exactly that behaviour
+    when there truly is no public_remote (or it cannot be reached) to fall back to; `source`
+    lets the caller say plainly which case it hit rather than imply a delta it does not have.
+    """
     stage = staging_dir(repo)
     if os.path.isdir(os.path.join(stage, ".git")) and _has_head(stage):
         materialize(stage, "HEAD", dest)
-        return _sgit(stage, "rev-parse", "HEAD").strip()
-    return None
+        return _sgit(stage, "rev-parse", "HEAD").strip(), "staging"
+    if public_remote:
+        with tempfile.TemporaryDirectory(prefix="publish-diff-clone-") as tmp:
+            clone = os.path.join(tmp, "clone")
+            out = subprocess.run(["git", "clone", "-q", "--no-checkout", public_remote, clone],
+                                 capture_output=True, text=True, env=_clean_env(), timeout=600)
+            if out.returncode != 0 or not _has_head(clone):
+                return None, "none"
+            sha = _sgit(clone, "rev-parse", "HEAD").strip()
+            materialize(clone, "HEAD", dest)
+            return sha, "public_remote"
+    return None, "none"
 
 
 def diff(repo: str, store: Optional[str] = None) -> Dict:
-    private_dir(store)  # fail closed before anything else
+    publish = private_dir(store)  # fail closed before anything else
+    man = manifest_mod.load(repo, publish)
     tree = tree_dir(repo)
     if not os.path.isdir(tree):
         raise PublishError("no built tree for %s; run build first" % repo)
@@ -90,7 +111,7 @@ def diff(repo: str, store: Optional[str] = None) -> Dict:
     with tempfile.TemporaryDirectory(prefix="publish-diff-") as tmp:
         old = os.path.join(tmp, "released")
         os.makedirs(old)
-        base = _released_tree(repo, old)
+        base, source = _released_tree(repo, old, man.public_remote)
         args = ["diff", "--no-index", "--no-color", "--no-ext-diff", "--no-textconv", "--binary"]
         stat_out = subprocess.run(["git"] + args[:-1] + ["--shortstat", old, tree],
                                   capture_output=True, env=_clean_env(), cwd=tmp)
@@ -103,8 +124,9 @@ def diff(repo: str, store: Optional[str] = None) -> Dict:
     out = os.path.join(work_dir(repo), "diff.patch")
     with open(out, "w", encoding="utf-8") as fh:
         fh.write(text)
-    record = {"repo": repo, "tree_hash": th, "base": base, "patch": out, "shown_at": _now(),
-              "changed": bool(text.strip()), "stat_tail": summary.strip().splitlines()[-1:]}
+    record = {"repo": repo, "tree_hash": th, "base": base, "base_source": source, "patch": out,
+              "shown_at": _now(), "changed": bool(text.strip()),
+              "stat_tail": summary.strip().splitlines()[-1:]}
     write_json(os.path.join(work_dir(repo), "diff.json"), record)
     return record
 
@@ -316,6 +338,15 @@ def release(repo: str, approved_by: str = "", store: Optional[str] = None) -> Di
         raise PublishError("diff not shown for this tree; run diff for the human gate")
     receipt = review_mod.require(repo, th, man.sha256, publish)   # the cold second-model read
     ruling = receipt.get("ruling")
+    if receipt.get("mode") == "incremental":
+        # Inherited verdicts rest on the basis the plan checked; re-check it now, fail closed.
+        if receipt.get("lists_sha256") != lists.digests:
+            raise PublishError("names/terms/hosts changed since the incremental cold read; "
+                               "rerun review")
+        last = (_releases(publish, repo) or [{}])[-1]
+        if last.get("tree_hash") != receipt.get("base_tree_hash"):
+            raise PublishError("another release went out since the incremental cold read; "
+                               "rerun review")
     stage = _prepare_staging(repo, man.public_remote)
     before = _sgit(stage, "rev-parse", "--verify", "-q", "HEAD", check=False).strip()
     _sync_worktree(stage, tree)
@@ -356,14 +387,27 @@ def release(repo: str, approved_by: str = "", store: Optional[str] = None) -> Di
               "remote": man.public_remote or None, "pushed": pushed, "scan_report": rpath,
               "manifest_sha256": man.sha256, "cold_read": receipt.get("verdict"),
               "cold_read_findings": receipt.get("findings"),
-              "cold_read_answer_sha256": receipt.get("answer_sha256")}
+              "cold_read_answer_sha256": receipt.get("answer_sha256"),
+              "cold_read_mode": receipt.get("mode", "full"),
+              "cold_read_files": receipt.get("files_read"),
+              "cold_read_inherited": receipt.get("inherited") or {},
+              "cold_read_inherited_from": receipt.get("inherited_from") or []}
+    if receipt.get("full_reason"):
+        record["cold_read_full_reason"] = receipt["full_reason"]
+    scope = ""
+    if receipt.get("mode") == "incremental":
+        frm = receipt.get("inherited_from") or []
+        scope = (" (incremental: %d file(s) read, %d inherited from %d earlier release(s), %d "
+                 "of them released on an owner ruling)") % (
+            len(receipt.get("files_read") or []), len(receipt.get("inherited") or {}),
+            len(frm), sum(1 for f in frm if f.get("ruled")))
     if ruling:
         record["owner_ruling"] = {"owner_said": ruling["owner_said"], "machine": ruling["machine"],
                                   "ruled_at": ruling["ruled_at"], "findings": ruling["findings"]}
         record["gate"] = ("released on owner ruling over %d findings: \"%s\""
-                          % (ruling["findings"], ruling["owner_said"]))
+                          % (ruling["findings"], ruling["owner_said"])) + scope
     else:
-        record["gate"] = "cold read CLEAN"
+        record["gate"] = "cold read CLEAN" + scope
     append_jsonl(os.path.join(publish, "releases.jsonl"), record)
     return record
 

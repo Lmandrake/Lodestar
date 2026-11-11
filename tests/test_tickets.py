@@ -154,8 +154,8 @@ class TestCreate(Base):
             tk.remote_claims = real
 
     def test_named_ticket(self):
-        tid, path, _ = tk.create("alpha", "Widget", "bug", root=self.root, name="WIDGET_HANG_UNSTICK_THIRD_TIME_LUCKY", legacy=False)
-        self.assertEqual(tid, "WIDGET_HANG_UNSTICK_THIRD_TIME_LUCKY")
+        tid, path, _ = tk.create("alpha", "Widget", "bug", root=self.root, name="ALPHA_UNSTICK_WIDGET_HANG_THIRD_TIME_LUCKY", legacy=False)
+        self.assertEqual(tid, "ALPHA_UNSTICK_WIDGET_HANG_THIRD_TIME_LUCKY")
         self.assertTrue(path.endswith(tid + ".md"))
         self.assertEqual(tk.find(tid, self.root)[0]["id"], tid)
         with self.assertRaisesRegex(tk.Refused, "already"):
@@ -167,14 +167,14 @@ class TestCreate(Base):
         a = tk.create("alpha", "A", "build", root=self.root, legacy=True)[0]
         b = tk.create("alpha", "B", "build", root=self.root, legacy=True)[0]
         tk.link(b, "blocked_by", a, root=self.root) if False else tk.update(b, "link", self.root, blocked_by=a)
-        nid, _ = tk.rename(a, "WIDGET_HANG_UNSTICK_THIRD_TIME_LUCKY", root=self.root)
+        nid, _ = tk.rename(a, "ALPHA_UNSTICK_WIDGET_HANG_THIRD_TIME_LUCKY", root=self.root)
         t, _h = tk.find(nid, self.root)
         self.assertEqual((t["id"], t["former_id"]), (nid, a))
         self.assertFalse(any(p.endswith(a + ".md") for h in tk.all_homes(self.root)
                              for p in tk._ticket_files(h.dir)))
         self.assertEqual(tk.find(b, self.root)[0]["blocked_by"], nid)
         with self.assertRaisesRegex(tk.Refused, "legacy"):
-            tk.rename(nid, "WIDGET_HANG_UNSTICK_FOURTH_TIME_LUCKY", root=self.root)
+            tk.rename(nid, "ALPHA_UNSTICK_WIDGET_HANG_FOURTH_TIME_LUCKY", root=self.root)
         with self.assertRaisesRegex(tk.Refused, "bad ticket name"):
             tk.rename(b, "NOT_A_GOOD_NAME", root=self.root)
 
@@ -241,6 +241,12 @@ class TestMoves(Base):
         self.assertEqual((f["status"], f["close_reason"]), ("done", "said: done, shipped"))
         f, _ = tk.move(self.t1, "open", root=self.root)
         self.assertNotIn("close_reason", f)
+
+    def test_multiline_said_is_refused_and_leaves_ticket_parseable(self):
+        with self.assertRaisesRegex(tk.Refused, "single line"):
+            tk.move(self.t1, "done", said="para one\n\npara two", root=self.root)
+        f, _ = tk.find(self.t1, self.root)
+        self.assertNotEqual(f["status"], "done")          # nothing written, still readable
 
     def test_illegal_move(self):
         tk.move(self.t1, "dropped", said="no", root=self.root)
@@ -420,13 +426,15 @@ class TestNonTicketBlockers(Base):
             tk.link(self.t2, "met", self.t1, root=self.root, said="x")
 
     def test_date_clears_itself_and_ready_reports_it(self):
-        tk.link(self.t2, "blocked_on", "until 2026-11-01", root=self.root)
+        day = datetime.now().date() + timedelta(days=30)      # relative: a fixed date becomes a time bomb
+        ref = f"until {day.isoformat()}"
+        tk.link(self.t2, "blocked_on", ref, root=self.root)
         t = self.f(self.t2)
-        before = datetime(2026, 10, 30).astimezone()
-        after = datetime(2026, 11, 1, 8).astimezone()
-        self.assertEqual(tk.blocker_states(t, now=before), [("until 2026-11-01", "waiting")])
-        self.assertEqual(tk.blocker_states(t, now=after), [("until 2026-11-01", "done")])
-        self.assertEqual(tk.cleared_nonticket(t, after), ["until 2026-11-01"])
+        before = (datetime.combine(day, datetime.min.time()) - timedelta(days=2)).astimezone()
+        after = datetime.combine(day, datetime.min.time()).replace(hour=8).astimezone()
+        self.assertEqual(tk.blocker_states(t, now=before), [(ref, "waiting")])
+        self.assertEqual(tk.blocker_states(t, now=after), [(ref, "done")])
+        self.assertEqual(tk.cleared_nonticket(t, after), [ref])
         self.assertEqual(tk.cleared_nonticket(t, before), [])
         ts = tk.load(tk.homes_for("alpha", self.root))
         self.assertEqual(tk.frontier(ts, tk.lookup_from(ts, self.root), after)[1][0][0]["id"], self.t2)
@@ -623,7 +631,7 @@ class TestMigrateActionsNames(Base):
         self._seed()
         rep = tk.migrate_actions("alpha", write=False, root=self.root)
         self.assertEqual(len(rep["unnamed"]), 2)
-        with self.assertRaisesRegex(tk.Refused, "SUBJECT_INTENT_TWIST name"):
+        with self.assertRaisesRegex(tk.Refused, "PROJECT_VERB_INTENTION_TWIST name"):
             tk.migrate_actions("alpha", write=True, root=self.root, offline=True)
         with self.assertRaisesRegex(tk.Refused, "bad ticket name"):
             tk.migrate_actions("alpha", write=True, root=self.root,

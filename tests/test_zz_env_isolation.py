@@ -33,6 +33,18 @@ The durable fix in a module is to stop deferring the read — pass the snapshot 
 into the cleanup (`self.addCleanup(_restore_env, saved)` with a module-level function), so
 nothing that happens afterwards can change what gets restored. `tests/test_sense.py` is the
 worked example.
+
+🔴 **Not every drift `EnvRestoredTest` sees is a leak.** Two files pre-set the test
+environment, and only `tests/__init__.py` runs before `PRISTINE_ENV`; `tests/conftest.py`
+runs after it. A variable pre-set in conftest alone is therefore *missing from the baseline*,
+which looks exactly like a leak and has the opposite fix. Measured 2026-11-10:
+`LODESTAR_TOMBSTONE_ROOT` and `LODESTAR_PEER_NUDGE` sat in that state, and the guard's old
+advice ("the `mkdtemp` prefix names the guilty module") sent readers to
+`tests/test_tombstones.py`, which sets no environment variable and merely shares a temp-dir
+prefix. A prefix names a string, not a setter. `EnvRestoredTest` now decides which cause it
+is from the two files' contents, and
+`test_every_variable_conftest_pre_sets_is_also_in_the_baseline` catches the ordering gap
+statically, as itself, before it can be misread.
 """
 
 import ast
@@ -86,6 +98,38 @@ def _self_attr_targets(node):
     return found
 
 
+def _preset_in(filename, key):
+    """Whether `tests/<filename>` names `key` at all (it only ever names one to pre-set it)."""
+    try:
+        with open(os.path.join(TESTS_DIR, filename), "r", encoding="utf-8") as handle:
+            return key in handle.read()
+    except OSError:  # pragma: no cover - defensive
+        return False
+
+
+def _drift_diagnosis(key):
+    """Which of the two causes a drifted `key` has, as advice the reader can act on.
+
+    The two look identical in the drift line and lead to opposite fixes, so the guard decides
+    between them instead of making the reader guess. Measured 2026-11-10: the old message said
+    the leaked value's `mkdtemp` prefix names the guilty module, which sent a reader to
+    `tests/test_tombstones.py` for `lodestar-tombstones-` — a module that sets no environment
+    variable and merely happens to use a matching temp-dir prefix.
+    """
+    if _preset_in("conftest.py", key) and not _preset_in("__init__.py", key):
+        return ("BASELINE DEFECT, not a leaking module: tests/conftest.py sets %s, but "
+                "tests/__init__.py does not pre-set it before PRISTINE_ENV, so the baseline "
+                "was captured without it. Nothing leaked. Fix: add the same "
+                "`if not os.environ.get(%r)` block to tests/__init__.py beside the sweep-lock "
+                "and untracked ones, which makes conftest's own line a no-op." % (key, key))
+    return ("LEAK: no pre-baseline line in tests/__init__.py claims %s, so a test module set "
+            "it and did not put it back. A `tempfile.mkdtemp` path's prefix is a HINT ONLY — "
+            "it names the prefix string, not the setter, and an innocent module can share it. "
+            "Confirm by grepping the suite for %r (the module that *assigns* it), then "
+            "`run_tests.py <that-module> sync`, and fix that module's cleanup to take the "
+            "saved snapshot BY VALUE — see this file's docstring." % (key, key))
+
+
 def _fixture_methods(class_node):
     return [node for node in class_node.body
             if isinstance(node, ast.FunctionDef)
@@ -108,15 +152,48 @@ class EnvRestoredTest(unittest.TestCase):
                  for key in sorted(keys)
                  if PRISTINE_ENV.get(key) != now.get(key)}
         if drift:
-            lines = ["a test module leaked environment into the rest of the suite:"]
+            lines = ["the watched environment is not as the process started:"]
             for key, (was, became) in drift.items():
                 lines.append("  %s: %r -> %r" % (key, was, became))
             lines.append("")
-            lines.append("The leaked value is usually a `tempfile.mkdtemp` path whose prefix "
-                         "names the guilty module (e.g. `lodestar-sense-`). Confirm with "
-                         "`run_tests.py <that-module> sync`, then fix the module's cleanup to "
-                         "take the saved snapshot BY VALUE — see this file's docstring.")
+            lines.append("Two different causes produce identical-looking lines above, and they "
+                         "have opposite fixes. Per variable:")
+            for key in drift:
+                lines.append("  %s\n    %s" % (key, _drift_diagnosis(key)))
             self.fail("\n".join(lines))
+
+    def test_every_variable_conftest_pre_sets_is_also_in_the_baseline(self):
+        """The ordering gap, caught statically — before it can be read as a leak.
+
+        Two files pre-set the test environment and only one of them runs before
+        `PRISTINE_ENV`: `tests/__init__.py` is imported first and feeds the baseline,
+        `tests/conftest.py` runs after it. So a variable added to conftest alone makes the
+        runtime check above fail forever, in a module that did nothing wrong. Measured
+        2026-11-10: `LODESTAR_TOMBSTONE_ROOT` and `LODESTAR_PEER_NUDGE` were both in that
+        state, and the first was read as a leak from `tests/test_tombstones.py`.
+
+        Static, because the runtime check reports this as a leak rather than as itself.
+        """
+        with open(os.path.join(TESTS_DIR, "conftest.py"), "r", encoding="utf-8") as handle:
+            conftest = ast.parse(handle.read(), filename="conftest.py")
+        preset = set()
+        for node in ast.walk(conftest):
+            if (isinstance(node, ast.Subscript)
+                    and isinstance(node.value, ast.Attribute)
+                    and node.value.attr == "environ"
+                    and isinstance(node.slice, ast.Constant)
+                    and isinstance(node.slice.value, str)
+                    and (node.slice.value.startswith("LODESTAR_")
+                         or node.slice.value in ("HOME", "CLAUDECODE", "CLAUDE_CODE_SESSION_ID"))):
+                preset.add(node.slice.value)
+        missing = sorted(key for key in preset if not _preset_in("__init__.py", key))
+        self.assertEqual(
+            [], missing,
+            "tests/conftest.py pre-sets these, but tests/__init__.py does not, so "
+            "PRISTINE_ENV is captured without them and the runtime check above fails "
+            "forever — reported as a leak from whichever module shares the temp-dir "
+            "prefix. Add the same `if not os.environ.get(...)` block to "
+            "tests/__init__.py, before PRISTINE_ENV: %s" % ", ".join(missing))
 
     def test_this_module_still_sorts_last(self):
         """Otherwise the check above silently stops covering whatever was added after it.

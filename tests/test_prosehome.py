@@ -43,6 +43,17 @@ class PlaceTest(ProseHomeBase):
         self.assertEqual(got.where, prosehome.STORE)
         self.assertEqual(got.path, os.path.join(self.store, "projects", "Thing", "conversations"))
 
+    def test_a_never_sync_registry_row_is_withheld_even_on_a_jpl_only_repo(self):
+        from unittest import mock
+        from lib import registry
+        repo = make_checkout(os.path.join(self.d, "Shared"), PRIVATE_URL)
+        row = registry.Entry("Shared", repo, "main", False, "**NEVER SYNC** shared org repo",
+                             send=False, receive=False)
+        with mock.patch.object(registry, "by_path", return_value={repo: row}):
+            self.assertEqual(prosehome.place(repo, "conversations").where, prosehome.WITHHELD)
+        with mock.patch.object(registry, "by_path", return_value={}):
+            self.assertEqual(prosehome.place(repo, "conversations").where, prosehome.REPO)
+
     def test_a_named_exception_stays_in_the_repo_on_a_work_mac(self):
         repo = make_checkout(os.path.join(self.d, "Example_Private"), GITHUB)
         placed = prosehome.place(repo, "conversations")

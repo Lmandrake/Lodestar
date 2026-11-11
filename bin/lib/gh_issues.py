@@ -814,16 +814,23 @@ def export_paths(cfg: Dict[str, object]) -> Tuple[str, str]:
 
 
 def write_export(cfg: Dict[str, object], issues: List[Dict], state_md: str) -> List[str]:
-    """Write issues.json + STATE.md; return the paths whose content changed."""
+    """Write issues.json + STATE.md; return the paths whose content changed.
+
+    `exported_at` is NOT stored (LODESTAR_FIX_ISSUES_EXPORT_TIMESTAMP_CONFLICT_STRANDS_COMMITS):
+    a field every machine rewrites on every run, even when the data is identical, is a
+    guaranteed `git pull --rebase` conflict between two machines that refresh in the same
+    window. `read_export` derives it instead from the file's own mtime, which a `git commit`
+    (this write) or a later `pull --rebase`/checkout both set honestly to "when this machine's
+    copy last changed" - no stored field, nothing to conflict on.
+    """
     jpath, spath = export_paths(cfg)
     os.makedirs(os.path.dirname(jpath), exist_ok=True)
     payload = {"repo": cfg["repo"], "host": cfg["host"],
                "data_as_of": max((i["updated"] for i in issues), default=None),
-               "exported_at": now_utc().isoformat(timespec="seconds"),
                "issues": issues}
     changed = []
     for path, text, cmp in ((jpath, json.dumps(payload, indent=1, sort_keys=True) + "\n",
-                             lambda t: re.sub(r'"exported_at": "[^"]*"', "", t)),
+                             lambda t: t),
                             (spath, state_md, strip_volatile)):
         old = open(path).read() if os.path.exists(path) else None
         if old is None or cmp(old) != cmp(text):
@@ -837,7 +844,10 @@ def read_export(cfg: Dict[str, object]) -> Tuple[List[Dict], Dict[str, object]]:
     jpath, _ = export_paths(cfg)
     with open(jpath) as f:
         d = json.load(f)
-    return d["issues"], {k: d.get(k) for k in ("exported_at", "data_as_of", "repo")}
+    meta = {k: d.get(k) for k in ("data_as_of", "repo")}
+    meta["exported_at"] = datetime.fromtimestamp(
+        os.path.getmtime(jpath), tz=timezone.utc).isoformat(timespec="seconds")
+    return d["issues"], meta
 
 
 def load(cfg: Dict[str, object], offline: bool = False) -> Tuple[List[Dict], Optional[str]]:

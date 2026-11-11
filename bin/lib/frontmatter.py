@@ -3,7 +3,7 @@
 Loop files (`loops/<id>.md`) carry a small YAML frontmatter block of flat scalars
 followed by freeform prose. That is the entire shape we need, so this module
 implements exactly that subset rather than taking on a YAML dependency — see
-docs/superpowers/specs/2026-08-31-lodestar-phase-0-1-design.md, decision D-A.
+design/specs/2026-08-31-lodestar-phase-0-1-design.md, decision D-A.
 
 Two properties the rest of the system relies on:
 

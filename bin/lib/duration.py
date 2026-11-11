@@ -20,7 +20,7 @@ _PATTERN = re.compile(
 JUST_DO_IT_MINUTES = 2
 
 #: Sentinel for "deliberately never recorded" (T4 ruling, 2026-10-14, question card "Yes, mark
-#: them 'unknown'" — docs/superpowers/specs/2026-10-14-project-tracking-system-design.md).
+#: them 'unknown'" — design/specs/2026-10-14-project-tracking-system-design.md).
 #: Replaces the old `0m` placeholder `loops.upsert`/`loops.derive` used to seed every new loop,
 #: which conflated "nobody logged this" with "this took no time at all" — 48 of 71 loop files
 #: carried it as of the measurement that prompted the ruling. `minutes()` returns None for this

@@ -12,7 +12,7 @@ import shutil
 import tempfile
 import unittest
 
-from lib import validate
+from lib import plans as plans_lib, validate
 from tests import needs_private, real_home_key, real_key  # noqa: E402
 
 REGISTRY_HEADER = "| Name | Path | Branch | Send | Receive | Machines | Id | Former | Remote | State |"
@@ -27,6 +27,12 @@ MACHINES_ROWS = [
     "| mt-001 | desktop | mac, work |",
     "| mb-999999 | laptop | mac |",
 ]
+
+PLANS_HEADER = "| Plan id | Kind | Repo id | Machines | Old | New | Disposition | Created at | Created by | Note |"
+PLANS_SEP = "|---------|------|---------|----------|-----|-----|--------------|------------|------------|------|"
+
+APPROVALS_HEADER = "| Plan id | Fingerprint | Machine | At | By |"
+APPROVALS_SEP = "|---------|-------------|---------|----|----|"
 
 
 class ValidateFixture(unittest.TestCase):
@@ -59,6 +65,12 @@ class ValidateFixture(unittest.TestCase):
     def _machines(self, rows=MACHINES_ROWS):
         return self._write("machines.md", "\n".join([MACHINES_HEADER, MACHINES_SEP] + rows) + "\n")
 
+    def _plans(self, rows):
+        return self._write("plans.md", "\n".join([PLANS_HEADER, PLANS_SEP] + rows) + "\n")
+
+    def _approvals(self, rows):
+        return self._write("approvals.md", "\n".join([APPROVALS_HEADER, APPROVALS_SEP] + rows) + "\n")
+
 
 class TestCleanStateHasNoFaults(ValidateFixture):
     def test_no_faults_on_a_consistent_merged_state(self):
@@ -78,6 +90,59 @@ class TestCleanStateHasNoFaults(ValidateFixture):
 
         found = validate.faults(registry_path, machines_path, tombstones_path)
         self.assertEqual(found, [])
+
+
+class TestRowColumnCount(ValidateFixture):
+    def test_a_repo_row_under_the_machine_paths_heading_is_a_fault(self):
+        row = "| Alpha | ~/dev/Alpha | main | on | on |  | alpha |  |  | active |"
+        text = "\n".join([REGISTRY_HEADER, REGISTRY_SEP, row, "", "## Machine paths", "",
+                          "| Repo | Machine | Path |", "|---|---|---|",
+                          "| Wisps | ~/dev/wisps | main | on | on |  | wisps |  |  | retired |"]) + "\n"
+        path = self._write("registry.md", text)
+        found = validate.faults(path, self._machines(), self._tombstones([]))
+        fault = next(f for f in found if f.kind == "row-column-count")
+        self.assertIn("Wisps", fault.subject)
+        self.assertIn(fault, validate.blocking(found))
+
+    def test_well_formed_tables_have_no_column_fault(self):
+        path = self._registry(["| Alpha | ~/dev/Alpha | main | on | on |  | alpha |  |  | active |"])
+        found = validate.faults(path, self._machines(), self._tombstones([]))
+        self.assertNotIn("row-column-count", [f.kind for f in found])
+
+
+class TestUnpartitionedRows(ValidateFixture):
+    def test_a_later_table_with_the_wrong_shape_is_unclaimed_by_either_parser(self):
+        row = "| Alpha | ~/dev/Alpha | main | on | on |  | alpha |  |  | active |"
+        text = "\n".join([REGISTRY_HEADER, REGISTRY_SEP, row, "",
+                          "## Something else", "",
+                          "| Foo | Bar |", "|-----|-----|",
+                          "| x | y |"]) + "\n"
+        path = self._write("registry.md", text)
+        found = validate.faults(path, self._machines(), self._tombstones([]))
+        fault = next(f for f in found if f.kind == "unpartitioned-row")
+        self.assertIn("x", fault.subject)
+        self.assertIn(fault, validate.blocking(found))
+
+    def test_a_row_shaped_line_with_no_header_above_it_is_unclaimed(self):
+        row = "| Alpha | ~/dev/Alpha | main | on | on |  | alpha |  |  | active |"
+        text = "| orphan | row |\n" + "\n".join([REGISTRY_HEADER, REGISTRY_SEP, row]) + "\n"
+        path = self._write("registry.md", text)
+        found = validate.faults(path, self._machines(), self._tombstones([]))
+        fault = next(f for f in found if f.kind == "unpartitioned-row")
+        self.assertIn("orphan", fault.subject)
+
+    def test_the_real_machine_paths_table_is_fully_claimed(self):
+        row = "| Alpha | ~/dev/Alpha | main | on | on |  | alpha |  |  | active |"
+        text = "\n".join([REGISTRY_HEADER, REGISTRY_SEP, row, "", "## Machine paths", "",
+                          "| Repo | Machine | Path |", "|---|---|---|",
+                          "| Alpha | home | ~/elsewhere |"]) + "\n"
+        path = self._write("registry.md", text)
+        found = validate.faults(path, self._machines(), self._tombstones([]))
+        self.assertNotIn("unpartitioned-row", [f.kind for f in found])
+
+    def test_the_real_registry_has_no_unpartitioned_rows(self):
+        found = validate.faults()
+        self.assertEqual([f for f in found if f.kind == "unpartitioned-row"], [])
 
 
 class TestDuplicateId(ValidateFixture):
@@ -225,6 +290,102 @@ class TestUnknownMachine(ValidateFixture):
         fault = next(f for f in found if f.kind == "unknown-machine")
         self.assertEqual(fault.subject, "mac")
         self.assertIn("never labels", fault.detail)
+
+
+class TestNameRemoteMismatchApprovedRehome(ValidateFixture):
+    """Ticket VALIDATE_CORRECT_DEV_SUFFIX_FALSE_FAULTS: an approved `rehome` plan is evidence
+    that a row's private remote deliberately diverging from its Name/Path is a recorded human
+    decision, not a half-applied rename -- see `_approved_rehome_remotes`."""
+
+    REMOTE = "git@github.com:Lmandrake/Lodestar-dev.git"
+
+    def _approved_plan_row(self, repo_id="lodestar", new=REMOTE):
+        plan = plans_lib.Plan(
+            plan_id="rehome-%s-20261028" % repo_id,
+            kind="rehome",
+            repo_id=repo_id,
+            machines=("all",),
+            old="",
+            new=new,
+            disposition="",
+            created_at="2026-10-28T14:17:58-07:00",
+            created_by="mt-123456",
+            note="Public release 2026-10-28: private working repo renamed; mirror takes plain name.",
+        )
+        fingerprint = plans_lib.fingerprint(plan)
+        plan_row = "| %s | rehome | %s | all |  | %s |  | 2026-10-28T14:17:58-07:00 | mt-123456 | note |" % (
+            plan.plan_id, repo_id, new)
+        approval_row = "| %s | %s | mt-123456 | 2026-10-28T14:18:04-07:00 | Lukas |" % (
+            plan.plan_id, fingerprint)
+        return plan_row, approval_row, fingerprint
+
+    def test_a_row_matching_an_approved_plan_remote_produces_no_fault(self):
+        plan_row, approval_row, _ = self._approved_plan_row()
+        registry_path = self._registry([
+            "| Lodestar | ~/dev/Lodestar | main | on | on |  | lodestar |  | %s | active |"
+            % self.REMOTE,
+        ])
+        found = validate.faults(
+            registry_path, self._machines(), self._tombstones([]),
+            self._plans([plan_row]), self._approvals([approval_row]))
+        self.assertEqual(
+            [f for f in found if f.kind in ("name-remote-mismatch", "path-remote-mismatch")], [])
+
+    def test_a_mismatch_with_no_plan_at_all_still_faults_both_kinds(self):
+        registry_path = self._registry([
+            "| Lodestar | ~/dev/Lodestar | main | on | on |  | lodestar |  | %s | active |"
+            % self.REMOTE,
+        ])
+        found = validate.faults(
+            registry_path, self._machines(), self._tombstones([]),
+            self._plans([]), self._approvals([]))
+        kinds = sorted(f.kind for f in found
+                        if f.kind in ("name-remote-mismatch", "path-remote-mismatch"))
+        self.assertEqual(kinds, ["name-remote-mismatch", "path-remote-mismatch"])
+
+    def test_a_plan_that_exists_but_is_not_approved_still_faults_both_kinds(self):
+        plan_row, _approval_row, _ = self._approved_plan_row()
+        registry_path = self._registry([
+            "| Lodestar | ~/dev/Lodestar | main | on | on |  | lodestar |  | %s | active |"
+            % self.REMOTE,
+        ])
+        found = validate.faults(
+            registry_path, self._machines(), self._tombstones([]),
+            self._plans([plan_row]), self._approvals([]))
+        kinds = sorted(f.kind for f in found
+                        if f.kind in ("name-remote-mismatch", "path-remote-mismatch"))
+        self.assertEqual(kinds, ["name-remote-mismatch", "path-remote-mismatch"])
+
+    def test_declared_remote_in_a_different_form_than_the_row_still_counts_as_a_match(self):
+        """The plan declares the ssh form; the row carries the https form of the SAME repo --
+        `skillclone.normalize_remote` is what makes those compare equal, never string equality."""
+        https_remote = "https://github.com/Lmandrake/Lodestar-dev.git"
+        plan_row, approval_row, _ = self._approved_plan_row(new=self.REMOTE)
+        registry_path = self._registry([
+            "| Lodestar | ~/dev/Lodestar | main | on | on |  | lodestar |  | %s | active |"
+            % https_remote,
+        ])
+        found = validate.faults(
+            registry_path, self._machines(), self._tombstones([]),
+            self._plans([plan_row]), self._approvals([approval_row]))
+        self.assertEqual(
+            [f for f in found if f.kind in ("name-remote-mismatch", "path-remote-mismatch")], [])
+
+    def test_a_remote_that_does_not_match_the_approved_plan_still_faults(self):
+        """An approval is evidence for ONE specific remote, never a blanket allowance for the
+        id -- a row whose remote diverges from what was actually approved must still fault."""
+        plan_row, approval_row, _ = self._approved_plan_row(new=self.REMOTE)
+        wrong_remote = "git@github.com:Lmandrake/SomeOtherRepo-dev.git"
+        registry_path = self._registry([
+            "| Lodestar | ~/dev/Lodestar | main | on | on |  | lodestar |  | %s | active |"
+            % wrong_remote,
+        ])
+        found = validate.faults(
+            registry_path, self._machines(), self._tombstones([]),
+            self._plans([plan_row]), self._approvals([approval_row]))
+        kinds = sorted(f.kind for f in found
+                        if f.kind in ("name-remote-mismatch", "path-remote-mismatch"))
+        self.assertEqual(kinds, ["name-remote-mismatch", "path-remote-mismatch"])
 
 
 class TestMissingId(ValidateFixture):

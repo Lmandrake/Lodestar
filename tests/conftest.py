@@ -33,6 +33,27 @@ _BIN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
 if _BIN not in sys.path:
     sys.path.insert(0, _BIN)
 
+# `bin/handoff.py` has been a forwarder since 2026-11-10: the tool itself moved to
+# MandrakeWorkflows (owner's ruling, D35). `import handoff` must reach the REAL module, not the
+# forwarder — tests set `handoff.ROOT` and call internals, which a forwarder does not have.
+#
+# 🔴 sys.path ORDER CANNOT CARRY THIS. Dozens of test modules do their own
+# `sys.path.insert(0, .../bin)` at import time, so whichever ran most recently is first, and
+# `bin/handoff.py` wins whenever one of them did. Measured 2026-11-10: putting the tool dir at
+# position 0 here passed when test_handoff.py ran alone and failed ~62 tests in the full suite.
+# So load the real module BY PATH and seat it in sys.modules; a later `import handoff` anywhere
+# then gets this object regardless of path order.
+_HANDOFF_TOOL = os.path.join(os.path.expanduser("~"), "dev", "MandrakeWorkflows",
+                             "tools", "handoff", "handoff.py")
+if os.path.isfile(_HANDOFF_TOOL) and "handoff" not in sys.modules:
+    os.environ.setdefault("LODESTAR_BIN", _BIN)   # the moved tool uses THIS checkout's libs
+    import importlib.util as _ilu
+    _spec = _ilu.spec_from_file_location("handoff", _HANDOFF_TOOL)
+    _mod = _ilu.module_from_spec(_spec)
+    sys.modules["handoff"] = _mod                 # seat it before exec: the module may import
+    _spec.loader.exec_module(_mod)                # itself indirectly, and a half-built entry is
+                                                  # still better than a second copy
+
 #: Launchers that raise windows or drive the UI. axprobe `--press`/AXRaise and the M365 reconnect
 #: script both touch the screen (bin/lib/sense.py), so they are refused too.
 # LODE-20: handoff.py --wake/--check read the drafts ledger and a personal mailbox; no test reads
@@ -44,6 +65,21 @@ if not os.environ.get("LODESTAR_SWEEP_LOCK"):
     import tempfile as _tempfile
     os.environ["LODESTAR_SWEEP_LOCK"] = os.path.join(
         _tempfile.mkdtemp(prefix="lodestar-sweeplock-"), "sweep.lock")
+
+# Peer nudge (bin/lib/peernudge.py): no test ever ssh-es the other Mac or spawns a sender.
+os.environ["LODESTAR_PEER_NUDGE"] = "off"
+
+# Synced press tombstones (bin/lib/tombstone.py): no test reads or writes the live store.
+if not os.environ.get("LODESTAR_TOMBSTONE_ROOT"):
+    import tempfile as _tempfile
+    os.environ["LODESTAR_TOMBSTONE_ROOT"] = _tempfile.mkdtemp(prefix="lodestar-tombstones-")
+
+# Untracked-project markers (bin/lib/untracked.py): no test sees the live machine's markers.
+# A test that exercises them points LODESTAR_UNTRACKED_ROOT at its own fixture tree.
+if not os.environ.get("LODESTAR_UNTRACKED_ROOT"):
+    import tempfile as _tempfile
+    os.environ["LODESTAR_UNTRACKED_ROOT"] = _tempfile.mkdtemp(prefix="lodestar-untracked-")
+    os.environ["LODESTAR_UNTRACKED_CACHE"] = os.path.join(os.environ["LODESTAR_UNTRACKED_ROOT"], "cache.json")
 
 GUI_COMMANDS = frozenset({"open", "osascript", "axprobe", "m365-reconnect.sh", "cliclick"})
 _SHELL_HEAD = re.compile(r"(?:^|[;&|(]\s*|\$\(\s*)(?:\S*/)?(open|osascript|axprobe|m365-reconnect\.sh|cliclick)(?=\s|$)")

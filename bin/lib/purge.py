@@ -29,7 +29,7 @@ pointing the other way.
 **It grew a second time the same day, and the sentence grew again.** Lukas also ruled that a
 purge follows **Waypoint shortcut rows**, which this module's scope sentence had listed as out
 of scope on the belief that no mechanical edit of them was safe. That belief was false:
-`~/dev/Waypoint/waypoint remove <Name>` (and `launch remove`) are non-interactive and each
+`~/.config/waypoint/waypoint remove <Name>` (and `launch remove`) are non-interactive and each
 regenerate the managed shell block afterwards. So a row this machine owns — the universal row,
 or one scoped to this machine, not `blocked` — is removed, and **the login file's managed block
 is rewritten** as part of doing it. Rows belonging to another machine, and rows recording a

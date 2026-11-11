@@ -34,6 +34,8 @@ half is the one this tool exists to enforce.
 ## The ritual at a glance
 
 ```
+  (tool: ~/dev/MandrakeWorkflows/tools/handoff/handoff.py; bin/handoff.py forwards to it)
+
   AGENT, at a stopping point            NEXT SESSION, first turn
   ─────────────────────────            ─────────────────────────
   handoff.py            ──writes──►    handoff.py --wake
@@ -196,13 +198,24 @@ the equivalents of all four into its `rimflow` ledger and game-bridge lock.
 see D26 (2026-09-21). The ritual reaches every session on both machines through two
 user-scope surfaces Lodestar already owns and converges:
 
-- the **`handoff` skill** — `docs/handoff/SKILL.md`, declared in `claude/skills.md` as
-  `Machines: all`, symlinked to `~/.claude/skills/handoff`. One copy, so it cannot drift from
-  itself.
+- the **`handoff` skill** — `~/dev/MandrakeWorkflows/skills/handoff/SKILL.md` (it moved out of
+  this repo on 2026-11-10, with the tool), declared in `claude/skills.md` as `Machines: all`,
+  symlinked to `~/.claude/skills/handoff`. One copy, so it cannot drift from itself.
 - the **machine-level item** — `claude/global/55-handoff-on-reboot.md`, rendered into
   `~/.claude/CLAUDE.md`, which names the trigger phrases and the non-negotiables.
 
-`bin/handoff.py` is **not copied per repo.** `_find_root()` is `git rev-parse --show-toplevel`
+**The tool moved to `~/dev/MandrakeWorkflows/tools/handoff/handoff.py` on 2026-11-10**, by his
+ruling that the skill and its tool live together. `~/dev/Lodestar/bin/handoff.py` remains as a
+forwarder that imports the same module and returns the same exit codes, so every line already
+written against the old path — the SessionStart hook, `companion_rail.py`, `bin/lib/stopping.py`,
+old handoffs, tickets and CLAUDE.md fragments on three machines — stays true. There is one
+implementation; nothing can drift. Where Lodestar is installed the tool still plugs into THIS
+repo's libraries for the private-store boundary, pointer outcomes and the drafts ledger
+(`LODESTAR_BIN` names the `bin/` to use; the forwarder sets it to its own directory). **No
+boundary logic moved** — `lib/boundary`, `lib/prosehome` and `lib/privatestore` are still here
+and still optional.
+
+The tool is **not copied per repo.** `_find_root()` is `git rev-parse --show-toplevel`
 against the working directory, so the single installed copy resolves whichever repo the session
 is in (verified from Hestia and Dialexis: each reported its own repo, seat `SOLO`). A repo needs
 no files, no config and no instructions of its own; `handoffs/` and `LESSONS.md` appear on
@@ -226,4 +239,6 @@ in a file everyone agrees is important.
   table above and in D25.
 - Ancestor: `Rimworld/src/RimMandrake/Utils/handoff.py` (project-specific; keeps its
   rimflow/bridge gates). The two share the content contract; this one is the portable
-  core. Tests: `tests/test_handoff.py`.
+  core. Tests: `tests/test_handoff.py` (they import the moved module; `tests/conftest.py` puts
+  MandrakeWorkflows' `tools/handoff` ahead of `bin/` so `import handoff` is the real one, not
+  the forwarder).

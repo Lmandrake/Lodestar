@@ -125,7 +125,7 @@ class PurgeTestCase(unittest.TestCase):
         self._patch(lifecycle, "declared_remote", lambda repo_id: DECLARED)
 
         # 🔴 Satellites are followed now, and their roots default to the REAL `~`,
-        # `~/dev/Waypoint` and this checkout. Forced onto the fixture for every test in this
+        # `~/.config/waypoint` and this checkout. Forced onto the fixture for every test in this
         # file — not per test — because a test that merely forgot to pass roots would remove a
         # real skill symlink or a real auto-memory directory off this machine.
         self.home = os.path.join(self.tmp, "home")
@@ -1013,7 +1013,7 @@ class TestEndToEndCLI(unittest.TestCase):
         self._patch(lifecycle, "_row_for", lambda repo_id: self.row)
 
         # Satellite roots forced onto the fixture, for the same reason PurgeTestCase does it:
-        # `satellites.removals` defaults to the real `~` and `~/dev/Waypoint`, and the CLI
+        # `satellites.removals` defaults to the real `~` and `~/.config/waypoint`, and the CLI
         # gives a test no seam to pass roots through.
         self.home = os.path.join(self.tmp, "home")
         os.makedirs(os.path.join(self.home, ".claude", "skills"))

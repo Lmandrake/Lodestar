@@ -97,10 +97,11 @@ def read_remotes(path: Optional[str] = None) -> Dict[str, str]:
     with open(target, encoding="utf-8") as handle:
         rows = mdtable.parse(handle.read())
     out = {}
+    from . import untracked
     for row in rows:
         name = row.get("name", "").strip()
         url = row.get("remote", "").strip()
-        if name and url:
+        if name and url and not (untracked.is_untracked_name(name) or untracked.is_untracked_text(url)):
             out[name] = url
     return out
 
@@ -197,6 +198,8 @@ def checkouts(root: Optional[str] = None) -> List[Tuple[str, Optional[str]]]:
             continue
         if not os.path.exists(os.path.join(full, ".git")):
             continue
+        if os.path.exists(os.path.join(full, ".lodestar-untracked")):
+            continue  # an untracked project is never discovered or adopted (lib/untracked.py)
         found.append((full, observe_remote(full)))
     return found
 

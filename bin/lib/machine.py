@@ -95,6 +95,22 @@ def roles(machines_path: Optional[str] = None) -> Dict[str, str]:
     }
 
 
+def liveness_exemptions(machines_path: Optional[str] = None) -> Dict[str, str]:
+    """Key -> reason, for machines whose `Liveness` cell reads `exempt: <reason>`."""
+    path = machines_path or paths.machines_file()
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r", encoding="utf-8") as handle:
+        rows = mdtable.parse(handle.read())
+    found = {}
+    for row in rows:
+        cell = (row.get("liveness") or "").strip()
+        if row.get("key") and cell.lower().startswith("exempt"):
+            found[row["key"].strip().lower()] = (
+                cell.split(":", 1)[1].strip() if ":" in cell else "") or "no reason given"
+    return found
+
+
 def role(machines_path: Optional[str] = None) -> str:
     """This machine's role name, e.g. 'desktop'. Raises if unregistered."""
     this = key()

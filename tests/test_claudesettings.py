@@ -21,7 +21,6 @@ DENY = [
     "Read(/**/.env)",
     "Read(~/**/.pem)",
     "Read(~/**/.key)",
-    "Read(~/**/.ssh/**)",
     "Read(~/**/.auth_key)",
 ]
 
@@ -168,7 +167,7 @@ class TestSeedBase(unittest.TestCase):
 
     def test_every_deny_rule_survives_a_peer_that_has_none(self):
         # The literal reading of "most permissive" would drop these. It must not: they are
-        # the rules blocking reads of .env, *.pem, *.key, .ssh/** and .auth_key.
+        # the rules blocking reads of .env, *.pem, *.key and .auth_key.
         live = {"permissions": {"deny": list(DENY)}}
         peers = {"other": {"permissions": {"deny": []}}}
         base = claudesettings.seed_base(live, peers)
@@ -576,6 +575,17 @@ class TestRender(unittest.TestCase):
 
     def test_empty_inputs_do_not_raise(self):
         self.assertEqual(claudesettings.render(None, None, None), {})
+
+
+class TestRetiredRules(unittest.TestCase):
+    def test_a_retired_deny_is_stripped_from_live_and_peers(self):
+        old = ["Read(/**/.ssh/**)", "Read(~/**/.ssh/**)", "Read(/**/.ssh/**/*[!b])",
+               "Read(~/**/.ssh/**/*[!b])", "Read(**/.env)"]
+        live = {"permissions": {"deny": list(old)}}
+        out = claudesettings.render({"permissions": {"deny": ["Read(**/.pem)"]}}, None, live)
+        self.assertEqual(out["permissions"]["deny"], ["Read(**/.env)", "Read(**/.pem)"])
+        seeded = claudesettings.seed_base({}, {"peer": live})
+        self.assertEqual(seeded["permissions"]["deny"], ["Read(**/.env)"])
 
 
 class ConvergeTest(unittest.TestCase):

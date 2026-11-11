@@ -59,13 +59,10 @@ def _private_flags():
 
 
 def _session_public() -> bool:
-    """True when this session's cwd is a github.com checkout (titles of private projects withheld)."""
-    try:
-        from lib import reckoning
-        top = reckoning.repo_top(os.getcwd())
-        return bool(top) and not reckoning.private_only(top)
-    except Exception:  # noqa: BLE001
-        return True
+    """Always False: titles show on screen in every session (owner ruling 2026-11-08)."""
+    # Owner ruling 2026-11-08, work items show on screen: nothing is withheld on screen.
+    # Commits stay guarded by bin/prose_guard.py and the hooks (ruling 5).
+    return False
 
 
 def _withhold(t) -> bool:
@@ -130,7 +127,7 @@ def main(argv=None) -> int:
 
     p = sub.add_parser("new")
     p.add_argument("--name", required=True,
-                   help="SUBJECT_INTENT_TWIST id, e.g. FETCHER_429_RETRY_STILL_DROPPING (see namecheck)")
+                   help="PROJECT_VERB_INTENTION_TWIST id, e.g. FETCHER_RETRY_429_STILL_DROPPING (see namecheck)")
     p.add_argument("title", nargs="+")
     p.add_argument("--project", required=True)
     p.add_argument("--type", required=True, choices=tk.TYPES)
@@ -208,15 +205,17 @@ def main(argv=None) -> int:
 
     p = sub.add_parser("rename")
     p.add_argument("old")
-    p.add_argument("new", help="SUBJECT_INTENT_TWIST name")
+    p.add_argument("new", help="PROJECT_VERB_INTENTION_TWIST name")
     p.add_argument("--no-push", action="store_true")
 
     p = sub.add_parser("namecheck")
     p.add_argument("name", nargs="?")
-    p.add_argument("--bank", action="store_true")
+    p.add_argument("--slots", "--bank", dest="slots", action="store_true",
+                   help="list the valid slot-1 projects. THE VERB IN SLOT 2 IS FREE-FORM: "
+                        "there is no word bank and no list to pick from (retired 2026-11-05).")
 
     p = sub.add_parser("need")
-    p.add_argument("--name", required=True, help="SUBJECT_INTENT_TWIST id")
+    p.add_argument("--name", required=True, help="PROJECT_VERB_INTENTION_TWIST id")
     p.add_argument("title", nargs="+")
     p.add_argument("--from", dest="src", required=True)
     p.add_argument("--to", required=True)
@@ -244,7 +243,7 @@ def main(argv=None) -> int:
     p = sub.add_parser("migrate-actions")
     p.add_argument("--project", required=True)
     p.add_argument("--write", action="store_true")
-    p.add_argument("--names", help="file: legacy item id -> SUBJECT_INTENT_TWIST name (JSON or 'id NAME' lines); required with --write")
+    p.add_argument("--names", help="file: legacy item id -> PROJECT_VERB_INTENTION_TWIST name (JSON or 'id NAME' lines); required with --write")
 
     p = sub.add_parser("stats")
     p.add_argument("--json", action="store_true")
@@ -285,13 +284,18 @@ def _run(a) -> int:
         return 0
     if a.verb == "namecheck":
         from lib import ticketname as tn
-        if a.bank or not a.name:
-            print(" ".join(sorted(tn.INTENT_WORDS)))
+        if a.slots or not a.name:
+            print("PROJECT_VERB_INTENTION_TWIST: %d-%d words, <= %d chars, A-Z 0-9 _ only."
+                  % (tn.MIN_WORDS, tn.MAX_WORDS, tn.MAX_LEN))
+            print("slot 2 (the VERB) is FREE-FORM -- any verb you like; the word bank is retired.")
+            print("slot 1 projects: " + " ".join(sorted(tn.project_slots())))
             return 0
         parts, probs = tn.parse(a.name), tn.problems(a.name)
         if parts:
-            print("subject=%s  intent=%s  twist=%s" % tuple(("_".join(x) if isinstance(x, list) else x)
-                                                           for x in parts))
+            project, verb, intention, twist = parts
+            print("project=%s  verb=%s  intention=%s  twist=%s"
+                  % (project, verb, "_".join(intention) or "-", "_".join(twist) or "-"))
+            print("   (the intention/twist split is editorial: nothing parses it)")
         print("OK" if not probs else "REFUSED: " + "; ".join(probs))
         return 0 if not probs else 1
     if a.verb == "new":
@@ -479,6 +483,8 @@ def _run(a) -> int:
                 hs = tk.homes_for(r["name"])
                 where = "; ".join("%s %s%s" % (h.kind, h.dir, " (github.com)" if h.public else "")
                                   for h in hs)
+                if tk.issues_canonical(hs[0].dir):
+                    where += "  [canonical: GitHub Issues; tickets/ read-only, writes refused]"
             except tk.Refused as exc:
                 where = "-- %s" % exc
             print("%-6s %-28s %s" % (r.get("code") or "", r["name"], where))

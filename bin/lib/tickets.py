@@ -67,7 +67,11 @@ ME = ("lukas", "mandrake")
 HOMES_FILE = "sync/ticket-homes.md"
 CLAIM_PREFIX = "refs/tickets/claims/"
 LEGACY_ID_RE = re.compile(r"^([A-Z][A-Z0-9]{1,5})-(\d+|x[a-z2-7]{5})$")   # LODE-35: retired form
-NAMED_ID_RE = re.compile(r"^[A-Z0-9]+(?:_[A-Z0-9]+){2,6}$")                 # SUBJECT_INTENT_TWIST
+# PROJECT_VERB_INTENTION_TWIST (lib/ticketname.py). The word bound is DERIVED from that
+# module, never restated: a namecheck that said OK while this refused "bad id" was
+# LODESTAR_TICKETNAME_HARDEN_NAMECHECK_OKS_UNFILEABLE (namecheck allowed 9 words, this 7).
+NAMED_ID_RE = re.compile(r"^[A-Z0-9]+(?:_[A-Z0-9]+){%d,%d}$"
+                         % (ticketname.LEGACY_MIN_WORDS - 1, ticketname.MAX_WORDS - 1))
 
 
 class _IdRe:
@@ -111,6 +115,9 @@ def homes_table(root: Optional[str] = None) -> List[Dict[str, str]]:
         raise Refused("no %s: the ticket homes table is missing" % path)
     with open(path, encoding="utf-8") as fh:
         rows = mdtable.parse(fh.read())
+    from lib import untracked
+    rows = [r for r in rows if not (untracked.is_untracked_name(r.get("name") or "")
+                                    or untracked.is_untracked_name(r.get("code") or ""))]
     codes: Dict[str, str] = {}
     for r in rows:
         c = (r.get("code") or "").strip()
@@ -167,6 +174,9 @@ def _overlay(name: str, repo: str) -> Tuple[str, str]:
 def homes_for(project: str, root: Optional[str] = None, private: bool = False,
               _seen: Tuple[str, ...] = ()) -> List[Home]:
     """The project's homes on this machine, primary first. `private` puts the overlay first."""
+    from lib import untracked
+    if untracked.is_untracked_name(project) or untracked.is_untracked_path(project):
+        raise Refused("untracked project: Lodestar keeps no tickets for it")
     rows, entries = homes_table(root), _entries(root)
     r = _row(project, rows, entries)
     name, code, kind = r.get("name") or "", (r.get("code") or "").strip(), (r.get("home") or "").strip()
@@ -335,7 +345,13 @@ def find(tid: str, root: Optional[str] = None) -> Tuple[Dict[str, str], Home]:
         raise Refused("not a ticket id: %r" % tid)
     m = LEGACY_ID_RE.match(tid)
     if not m:                      # a named id carries no project code: look in every home
-        for h in all_homes(root):
+        # Uncached, this resolves all_homes() for EVERY registered project (one find() call
+        # ~= hundreds of git subprocesses to classify public/private) — measured as the
+        # dominant cost of `handoff.py --wake` (LODESTAR_RESTORE_WAKE_POINTERS_HOOK_CUTS_THEM_UNSEEN):
+        # a wake with 6 named-id pointers spent >40s of its ~45s here. The home list changes
+        # only when a remote or a homes table changes, so the hour-old machine-local cache
+        # (same one TicketsStore._homes() already trusts) is safe here too.
+        for h in all_homes(root, cached=root is None):
             p = os.path.join(h.dir, tid + ".md")
             if os.path.exists(p):
                 return read(p), h
@@ -504,7 +520,7 @@ def allocate(homes: Sequence[Home], n: int = 1, offline: bool = False) -> List[s
 
 
 def claim_name(homes: Sequence[Home], name: str, offline: bool = False) -> str:
-    """Claim a SUBJECT_INTENT_TWIST id: refuse a name any home holds, then take the ref atomically."""
+    """Claim a PROJECT_VERB_INTENTION_TWIST id: refuse a name any home holds, then take the ref atomically."""
     taken = {os.path.basename(p)[:-3] for h in all_homes() for p in _ticket_files(h.dir)}
     probs = ticketname.problems(name, taken)
     if probs:
@@ -539,8 +555,25 @@ def _lock(code: str):
 
 def commit(home: Home, files: Sequence[str], message: str, push: bool = True) -> str:
     """Commit exactly `files` in the home's checkout, then push. Returns one status word."""
+    try:
+        return _commit(home, files, message, push)
+    finally:
+        # the other Mac pulls it in seconds (lib/peernudge.py); if this commit failed (a held
+        # index.lock: the 2026-11-10 Desktop Drop), the nudge's sender lands the named file
+        if push:
+            try:
+                from lib import peernudge
+                peernudge.fire(files=files)
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _commit(home: Home, files: Sequence[str], message: str, push: bool = True) -> str:
     rels = [os.path.relpath(f, home.repo) for f in files]
-    rc, _, err = _git(home.repo, "add", "-A", "--", *rels)    # -A: a renamed ticket's old path is a deletion
+    # -A: a renamed ticket's old path is a deletion. Ridden out like the sweep's own add: a
+    # bare `git add` lost the owner's 2026-11-10 Drop press to a transient index.lock.
+    rc, _, err = gitutil._retry_on_lock(
+        home.repo, "git add", lambda: gitutil.run(home.repo, "add", "-A", "--", *rels))
     if rc != 0:
         raise Refused("git add failed in %s: %s" % (home.repo, err.strip()[:200]))
     rc, out, err = gitutil.commit(home.repo, message, paths=rels)
@@ -647,11 +680,12 @@ def create(project: str, title: str, ttype: str, body: str = "", owner: str = "l
            name: str = "", legacy: bool = False, **extra: str) -> Tuple[str, str, str]:
     """File one ticket. Returns (id, path, git status word).
 
-    `name` is the SUBJECT_INTENT_TWIST id (lib/ticketname.py). Without it the call is refused;
+    `name` is the PROJECT_VERB_INTENTION_TWIST id (lib/ticketname.py). Without it the call is refused;
     `legacy=True` (tests, imports) mints the retired `CODE-<n>` form."""
     if not name and not legacy:
-        raise Refused("a ticket needs a name: SUBJECT_INTENT_TWIST, e.g. TICKET_NAMES_ADOPT_NO_MORE_NUMBERS "
-                      "(`ticket namecheck --bank` lists the intent words)")
+        raise Refused("a ticket needs a name: PROJECT_VERB_INTENTION_TWIST, e.g. "
+                      "LODESTAR_ADOPT_TICKET_NAMES_NO_MORE_NUMBERS (slot 1 is the registry Id, "
+                      "slot 2 any verb you like; `ticket namecheck NAME` checks one)")
     if ttype not in TYPES:
         raise Refused("type %r not in %s" % (ttype, "/".join(TYPES)))
     if status not in STATUSES or status in TERMINAL:
@@ -706,6 +740,12 @@ def update(tid: str, msg: str, root: Optional[str] = None, push: bool = True,
            **changes: Optional[str]) -> Tuple[Dict[str, str], str]:
     """Change fields of one ticket, append a log line, commit. A None value removes a field.
     With `expect_version`, refuse (Stale) unless the file is unchanged since it was read."""
+    for k, v in list(changes.items()) + [("log message", msg)]:
+        if v is not None and re.search(r"[\r\n]", str(v)):
+            # frontmatter is one line per field; a multi-line value writes a file its own parser
+            # cannot read (TICKETS_HARDEN_MULTILINE_SAID). Long prose belongs in the body.
+            raise Refused("%s must be a single line (got a multi-line value); "
+                          "put long prose in the ticket body" % k)
     t, home = find(tid, root)
     fh = _lock(home.code)
     try:
@@ -737,7 +777,7 @@ def update(tid: str, msg: str, root: Optional[str] = None, push: bool = True,
 
 
 def rename(old: str, new: str, root: Optional[str] = None, push: bool = True) -> Tuple[str, str]:
-    """Give a ticket a SUBJECT_INTENT_TWIST name. The file moves (git mv), `former_id` keeps the
+    """Give a ticket a PROJECT_VERB_INTENTION_TWIST name. The file moves (git mv), `former_id` keeps the
     old id findable, and every ticket in every home that lists the old id in a link field, plus
     `id:` itself, follows. Only legacy-form ids rename, and only to a name `ticketname` accepts.
     Free-text mentions of the old id in bodies and docs are left (they still resolve via
@@ -1469,7 +1509,7 @@ def migrate_actions(project: str, write: bool = False, root: Optional[str] = Non
     copied verbatim into its ticket body; `tickets/MIGRATION-actions.tsv` maps legacy id ->
     ticket; ACTIONS.md then says `tracker: tickets` and keeps its text (git holds the rest).
     Refuses if any ticket would change Orders' reading (key, open/closed, his, due, title).
-    A write needs `names`: legacy item id -> SUBJECT_INTENT_TWIST name for EVERY item; numbered
+    A write needs `names`: legacy item id -> PROJECT_VERB_INTENTION_TWIST name for EVERY item; numbered
     CODE-n ids are never minted (the dry run lists the items still needing a name)."""
     homes = homes_for(project, root)
     home = homes[0]
@@ -1484,7 +1524,7 @@ def migrate_actions(project: str, write: bool = False, root: Optional[str] = Non
     if not write:
         return report
     if report["unnamed"]:
-        raise Refused("migrate-actions needs a SUBJECT_INTENT_TWIST name for every item (--names FILE); "
+        raise Refused("migrate-actions needs a PROJECT_VERB_INTENTION_TWIST name for every item (--names FILE); "
                       "missing: %s" % ", ".join(report["unnamed"][:10]))
     taken = {os.path.basename(p)[:-3] for h in all_homes(root) for p in _ticket_files(h.dir)}
     ids = [names[p["item"]["id"]] for p in plan]

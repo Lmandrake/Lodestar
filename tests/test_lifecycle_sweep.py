@@ -283,14 +283,24 @@ class EnrollmentReportedTest(SweepTest):
                   encoding="utf-8") as handle:
             handle.write("\n".join(lines) + "\n")
 
-    def test_an_unstamped_checkout_is_reported_as_unenrolled(self):
+    def test_an_unstamped_checkout_is_stamped_by_the_sweep(self):
+        """A fresh clone gets its stamp from the sweep, no human running enroll_checkouts.py."""
         path = self.make_repo("alpha")
         self.registry_with_ids([("alpha", path, "alpha-id")])
         self.run_sweep()
         payload = self.status()
         self.assertIn("enrollment", payload)
-        self.assertIn("alpha", payload["enrollment"]["unenrolled"])
-        self.assertEqual(payload["enrollment"]["enrolled"], [])
+        self.assertIn("alpha", payload["enrollment"]["enrolled"])
+        self.assertEqual(payload["enrollment"]["unenrolled"], [])
+        self.assertEqual(enroll.read_stamp(path), "alpha-id")
+
+    def test_a_different_existing_stamp_is_never_overwritten(self):
+        path = self.make_repo("alpha")
+        self.registry_with_ids([("alpha", path, "alpha-id")])
+        self.assertTrue(enroll.stamp(path, "someone-else"))
+        self.run_sweep()
+        self.assertEqual(enroll.read_stamp(path), "someone-else")
+        self.assertIn("alpha", self.status()["enrollment"]["unenrolled"])
 
     def test_a_stamped_checkout_is_reported_as_enrolled(self):
         path = self.make_repo("alpha")

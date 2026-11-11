@@ -5,17 +5,25 @@ description: File, list, move, link and close TICKETS, Lodestar's ticket system 
 
 # Tickets
 
-## Names: SUBJECT_INTENT_TWIST (owner, 2026-10-25; policy from RimMandrake, 2026-10-10)
+## Names: PROJECT_VERB_INTENTION_TWIST (owner, 2026-11-05)
 
 Every new ticket is minted with `--name`, never a number (`LODE-35` is the retired form; old ids
-stay valid forever, never renamed). `SUBJECT_INTENT_TWIST`: 3-7 words, <= 44 chars, A-Z 0-9 `_`.
-SUBJECT (1-4 greppable real nouns), INTENT (one bank word, what it set out to do, never live
-state), TWIST (a true, specific, kind aside as of filing: `THIRD_TIME_LUCKY`, `STILL_RED`).
+stay valid forever, never renamed, and are never cited bare either -- always with a plain-language
+title). `PROJECT_VERB_INTENTION_TWIST`: 4-9 words, <= 64 chars, A-Z 0-9 `_`.
+
+- **PROJECT** (slot 1) -- the registry `Id` from `sync/registry.md`, so the item is traceable and
+  can never be confused with a same-named one elsewhere. Belongs to no project? Mint an obvious
+  throwaway slot on the spot, `PROJNOW` or `PROJTEMP`, and reuse the same one for the same topic.
+- **VERB** (slot 2) -- **free-form: any verb you like.** The 72-word intent bank is RETIRED
+  (measured 2026-11-05: up to 9 synonyms per concept, 24 words never used, no tool read it).
+  The slot works because it is pinned to index 2, not because the word is on a list.
+- **INTENTION** -- what it set out to do when filed, never live state.
+- **TWIST** -- a true, specific, kind aside as of filing (`THIRD_TIME_LUCKY`, `STILL_RED`).
+
 Not a guess, no in-joke needing this conversation, never mocking a person. The title still says
-what done looks like. If the intent was wrong, file a new ticket and link it; never rename.
-`ticket namecheck NAME` shows the parse and refuses bad names; `ticket namecheck --bank` lists
-intent words. If a subject word is a bank word (`STALE_RENAME_GATES...` splits at RENAME),
-rephrase. Rules: `bin/lib/ticketname.py` (copy of RimMandrake's `model.py`; keep in step).
+what done looks like. If the intention was wrong, file a new ticket and link it; never rename.
+`ticket namecheck NAME` shows the parse and refuses bad names; `ticket namecheck --slots` lists
+the valid slot-1 projects. Rules and the measurements behind them: `bin/lib/ticketname.py`.
 
 Decision D30 (`~/dev/Lodestar/docs/DECISIONS.md`); design notes
 are kept in the private store. Every project in
@@ -24,9 +32,9 @@ are kept in the private store. Every project in
 ## File one (one line)
 
 ```
-python3 ~/dev/Lodestar/bin/ticket.py new --project lodestar --type build --name MODEL_DISPATCH_BUILD_CHEAPEST_FIRST "Intelligent model dispatch"
-python3 ~/dev/Lodestar/bin/ticket.py new --project alpha --type action --due 2026-11-02 --name REVIEW_FORM_SUBMIT_BEFORE_DEADLINE "Submit the review form"
-python3 ~/dev/Lodestar/bin/ticket.py new --project fetcher --type bug --likely-fix "retry on 429" --name SEARCH_RESULTS_FIX_SILENTLY_DROPPED "Search drops results"
+python3 ~/dev/Lodestar/bin/ticket.py new --project lodestar --type build --name LODESTAR_BUILD_MODEL_DISPATCH_CHEAPEST_FIRST "Intelligent model dispatch"
+python3 ~/dev/Lodestar/bin/ticket.py new --project alpha --type action --due 2026-11-02 --name PROJNOW_SUBMIT_REVIEW_FORM_BEFORE_DEADLINE "Submit the review form"
+python3 ~/dev/Lodestar/bin/ticket.py new --project fetcher --type bug --likely-fix "retry on 429" --name FETCHER_FIX_SEARCH_RESULTS_SILENTLY_DROPPED "Search drops results"
 ```
 
 (`ticket ...` is the same command in an interactive zsh.) Types: `build` (make the project or its
@@ -43,7 +51,7 @@ not Lukas, decided to file it.
 ## Another project's work: a need
 
 ```
-python3 ~/dev/Lodestar/bin/ticket.py need --from opencodecli --to lodestar --name MODEL_DISPATCH_BUILD_CHEAPEST_FIRST "Intelligent model dispatch"
+python3 ~/dev/Lodestar/bin/ticket.py need --from opencodecli --to lodestar --name LODESTAR_BUILD_MODEL_DISPATCH_CHEAPEST_FIRST "Intelligent model dispatch"
 ```
 
 It lands in the target's inbox as `proposed`; the target accepts (`move ID open`) or declines

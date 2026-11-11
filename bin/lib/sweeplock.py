@@ -4,7 +4,7 @@
     python3 bin/lib/sweeplock.py status
     python3 bin/lib/sweeplock.py run --as tender --wait 120 --detail tdr-... -- CMD ...
 
-Design: docs/design/2026-10-25-remote-execution.md §4 ("Lock against the sweep"). Before this,
+Design: design/specs/2026-10-25-remote-execution.md §4 ("Lock against the sweep"). Before this,
 nothing a second process could take existed: `sync.py` had a progress file, a watchdog and
 per-repo pauses, but a Tender recipe (rewrite recovery, a git-state repair) could run while the
 sweep was fast-forwarding, committing or pushing the very checkout it was repairing.

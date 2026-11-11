@@ -685,8 +685,11 @@ SOURCE_SUFFIXES = (
 #: are generated or data, and `loops/*.md` must never match.
 SOURCE_ROOT_DOCS = ("README.md", "USING.md", "CLAUDE.md", "AGENTS.md")
 
-#: Any path whose first segment is one of these is authored prose.
-SOURCE_DIRS = ("docs",)
+#: Any path whose first segment is one of these is authored prose. `design/` is here because
+#: the 2026-11-09 ruling moved specs and plans out of `docs/superpowers/` to the repo root: had
+#: it stayed absent, every design doc the sweep saw would have become an automatic commit —
+#: the same way d79cb82 swallowed a plans file before `docs/` was listed.
+SOURCE_DIRS = ("docs", "design")
 
 
 def is_source(path: str) -> bool:

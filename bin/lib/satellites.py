@@ -1,7 +1,7 @@
 """Find and follow the satellites of a repo rename — the capabilities a moved checkout
 does NOT carry with it just because `git mv` (or `os.rename`) succeeded.
 
-Implements guard 7 of `docs/superpowers/specs/2026-09-30-repo-lifecycle-design.md` §3D:
+Implements guard 7 of `design/specs/2026-09-30-repo-lifecycle-design.md` §3D:
 *"A moved directory does not mean a completed rename. Each satellite is checked
 independently: the skill symlinks, the per-project memory directories, the in-repo memory
 snapshot directories, and the shortcut rows. Declaring the row converged because the
@@ -43,7 +43,7 @@ anything is one where `find()` already judged it safe.
 It claimed *"there is no mechanical edit that is safe without a human deciding which row(s) to
 touch"*, on the grounds that Waypoint's tables are hand-edited and per-row machine-scoped. The
 second half is true and is honoured below; the first half was false and was never measured.
-`~/dev/Waypoint/waypoint` is a stdlib-only Python CLI whose subcommands are non-interactive and
+`~/.config/waypoint/waypoint` is a stdlib-only Python CLI whose subcommands are non-interactive and
 each `sync` afterwards, so the mechanical edit exists and is the tool's own supported route:
 
 - a **removal** follows a row by deleting it — `remove <Name>` / `launch remove <Name>`;

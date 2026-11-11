@@ -1,6 +1,6 @@
 """Repo mirrors: one repo on github.com and on the private git host, kept level by the sweep.
 
-Design: `docs/superpowers/specs/2026-10-19-repo-mirrors-design.md` (v2). Owner rulings, both
+Design: `design/specs/2026-10-19-repo-mirrors-design.md` (v2). Owner rulings, both
 2026-10-19: **two-way sync**, and **every Mac that reaches both hosts pushes** (races are detected and
 retried next run, never flagged).
 

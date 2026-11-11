@@ -94,7 +94,7 @@ class ExecutorTestCase(unittest.TestCase):
         #
         # 🔴 The wrapper OVERRIDES whatever roots the production caller passes, and records
         # them. Overriding is the isolation: since 2026-10-01 `_do_rename` passes the real
-        # `paths.root()` and the real `~/dev/Waypoint`, so a wrapper that honoured them would
+        # `paths.root()` and the real `~/.config/waypoint`, so a wrapper that honoured them would
         # read this repo's committed snapshot-memory tree and his 60 live shell shortcuts.
         # Recording is the proof: `self.find_kwargs` is what lets a test assert the production
         # caller supplied both roots at all, which a source-text check can only approximate.
@@ -116,7 +116,7 @@ class ExecutorTestCase(unittest.TestCase):
     def waypoint_row(self, filename, name, path, machine="", status="active"):
         """A shortcut row inside the FIXTURE's Waypoint root, never the real one.
 
-        🔴 No test may touch `~/dev/Waypoint`'s tables — 60 live shell shortcuts. This writes
+        🔴 No test may touch `~/.config/waypoint`'s tables — 60 live shell shortcuts. This writes
         into `self.waypoint` under the tempdir, and that root has no `waypoint` executable
         unless a test plants a stub, so even a forgotten runner cannot reach the real CLI.
         """

@@ -25,8 +25,9 @@ import os
 from typing import Dict, NamedTuple, Optional
 
 try:
-    from lib import privatestore, machine, reckoning
+    from lib import privatestore, machine, reckoning, registry
 except ImportError:  # pragma: no cover
+    import registry  # type: ignore
     import privatestore  # type: ignore
     import machine  # type: ignore
     import reckoning  # type: ignore
@@ -94,10 +95,34 @@ def overlay(repo: str, store: Optional[str] = None) -> str:
     return os.path.join(base, OVERLAY_DIR, name)
 
 
+NOT_OURS_MARK = "never sync"
+
+
+def is_not_ours(repo: str) -> bool:
+    """The registry marks this repo as someone else's: send and receive both off, and a Notes
+    cell saying NEVER SYNC (for example a repo shared from another organisation's GitHub org).
+    Nothing of ours may be written into it. Any registry read failure answers False, because a
+    broken registry must not stop the placement of our own repos."""
+    try:
+        entry = registry.by_path().get(os.path.realpath(os.path.expanduser(repo)))
+    except Exception:
+        return False
+    return bool(entry) and not entry.send and not entry.receive \
+        and NOT_OURS_MARK in entry.notes.lower()
+
+
 def place(repo: str, sub: str, store: Optional[str] = None,
           machine_key: Optional[str] = None) -> Placement:
     """Where `<repo>/<sub>` prose belongs on this machine."""
     repo = os.path.realpath(os.path.expanduser(repo))
+    try:
+        from lib import untracked
+    except ImportError:  # pragma: no cover
+        import untracked  # type: ignore
+    if untracked.is_untracked_path(repo):
+        return Placement(WITHHELD, None, "untracked project: Lodestar keeps no record of it")
+    if is_not_ours(repo):
+        return Placement(WITHHELD, None, "registry marks this repo NEVER SYNC: not ours, nothing flows in")
     if os.path.basename(repo.rstrip(os.sep)) in IN_REPO:
         return Placement(REPO, os.path.join(repo, sub), "owner ruling: this repo holds its own prose")
     if repo_is_private(repo):

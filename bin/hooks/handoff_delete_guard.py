@@ -2,7 +2,9 @@
 """PreToolUse hook (Bash): refuse commands that delete or move files under a `handoffs/` directory.
 
 Incident 2026-10-19: subagents deleted 40 handoff files outside `handoff.py --cull`, losing 18
-live pointers. The only sanctioned route is `~/dev/Lodestar/bin/handoff.py --cull --apply`, which
+live pointers. The only sanctioned route is
+`~/dev/MandrakeWorkflows/tools/handoff/handoff.py --cull --apply` (the tool moved there
+2026-11-10; `~/dev/Lodestar/bin/handoff.py` forwards to it, so either path is fine), which
 deletes in-process (never through Bash, so this hook cannot see it) after checking supersession
 and lessons-filing.
 
@@ -101,8 +103,10 @@ def decide(command: str):
             return (
                 "REFUSED: this command deletes or moves files under a handoffs/ directory. "
                 "Handoffs carry live pointers; 40 were deleted by hand on 2026-10-19. "
-                "Use the sanctioned route: python3 ~/dev/Lodestar/bin/handoff.py --cull "
-                "(dry run) then --cull --apply. If the owner truly asked for this deletion, "
+                "Use the sanctioned route: python3 ~/dev/MandrakeWorkflows/tools/handoff/"
+                "handoff.py --cull (dry run) then --cull --apply (the old "
+                "~/dev/Lodestar/bin/handoff.py path still forwards to it). "
+                "If the owner truly asked for this deletion, "
                 "append the comment `%s` to the command." % OVERRIDE
             )
     return None

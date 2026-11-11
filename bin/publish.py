@@ -3,7 +3,8 @@
 
     bin/publish.py build <repo>     # pushed, clean HEAD of ~/dev/<repo> -> manifest-filtered tree
     bin/publish.py scan <repo>      # every scanner class; exit 1 on any unallowed hit
-    bin/publish.py review <repo>    # cold second-model read of the tree: a hard release gate
+    bin/publish.py review <repo> [--full]   # cold second-model read: a hard release gate; reads
+                                    # only files changed since the last release unless --full
     bin/publish.py prompt-eval      # score the cold-read prompt on the private labelled fixture
     bin/publish.py rule <repo> [--owner-said TEXT]   # rule over a FINDINGS cold read
     bin/publish.py diff <repo>      # built tree vs the last released tree: the human gate
@@ -57,10 +58,16 @@ def cmd_scan(args) -> int:
 
 
 def cmd_review(args) -> int:
-    rec = review_mod.review(args.repo)
+    rec = review_mod.review(args.repo, full=getattr(args, "full", False))
     print("%s: cold read %s, %d finding(s) over %d slice(s); %d binary file(s) unread; prompt v%d %s"
           % (args.repo, rec["verdict"], rec["findings"], rec["slices"], len(rec["binaries_unread"]),
              rec["prompt_version"], rec["prompt_sha256"][:12]))
+    if rec["mode"] == "incremental":
+        print("incremental: read %d changed file(s); %d unchanged file(s) inherit the verdict of "
+              "release %s" % (len(rec["files_read"]), len(rec["inherited"]),
+                              (rec["base_tree_hash"] or "")[:12]))
+    else:
+        print("full read (%s)" % rec.get("full_reason", "whole tree"))
     print("receipt: %s (answer beside it, private)" % rec["path"])
     return 0 if rec["verdict"] == "CLEAN" else 1
 
@@ -89,8 +96,14 @@ def cmd_rule(args) -> int:
 
 def cmd_diff(args) -> int:
     rec = release_mod.diff(args.repo)
-    print("%s vs %s: %s" % (args.repo, rec["base"][:12] if rec["base"] else "no prior release",
-                            (rec["stat_tail"] or ["no changes"])[0]))
+    source = rec.get("base_source", "none")
+    if source == "none":
+        baseline = "no prior release recorded for this repo on any machine"
+    elif source == "public_remote":
+        baseline = "%s (fetched from the public remote; no local staging clone on this machine)" % rec["base"][:12]
+    else:
+        baseline = rec["base"][:12]
+    print("%s vs %s: %s" % (args.repo, baseline, (rec["stat_tail"] or ["no changes"])[0]))
     print("patch: %s" % rec["patch"])
     return 0
 
@@ -133,6 +146,9 @@ def main(argv=None) -> int:
                      ("diff", cmd_diff)):
         p = sub.add_parser(name)
         p.add_argument("repo", type=check_repo_name)
+        if name == "review":
+            p.add_argument("--full", action="store_true",
+                           help="read the whole tree, inheriting no earlier verdict")
         p.set_defaults(fn=fn)
     p = sub.add_parser("release")
     p.add_argument("repo", type=check_repo_name)

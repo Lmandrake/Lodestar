@@ -419,14 +419,17 @@ def evaluate(spec: Optional[Dict], limit: Optional[float] = None, use_cache: boo
             spec = decode(spec)
         except ValueError as e:
             return Result(UNKNOWN, "invalid check: %s" % e)
-    ttl = _ttl_min(spec)
     now = now or datetime.now(timezone.utc)
+    if spec.get("type") == "cmd" and (spec.get("trusted") is not True or not allow_cmd):
+        # A denied cmd never reads a verdict an authorized run cached, and its denial is never cached.
+        return run(spec, limit, allow_cmd=allow_cmd)
+    ttl = _ttl_min(spec)
     key = spec_key(spec)
     if use_cache and ttl > 0:
         hit = _read_json(CACHE_FILE).get(key)
         if hit:
             try:
-                if now - datetime.fromisoformat(hit["at"]) < timedelta(minutes=ttl):
+                if timedelta(0) <= now - datetime.fromisoformat(hit["at"]) < timedelta(minutes=ttl):
                     return Result(hit["state"], hit.get("reason", ""), cached=True)
             except (KeyError, ValueError, TypeError):
                 pass
