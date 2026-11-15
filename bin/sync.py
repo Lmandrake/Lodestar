@@ -401,11 +401,22 @@ def soft_lock_owner(repo_path: str, our_role: str,
     its `last_touch`, both of which the loop retirement removed
     (design/plans/2026-11-10-retire-loops.md).
 
-    🔴 **This is a real regression and it is NOT silently dropped**: ticket
-    `LODESTAR_REPLACE_SWEEP_SOFT_LOCK_LOOP_WAS_THE_LOCK`. A cross-machine claim cannot live in
-    a synced repo (nothing under `airlock/` may hold per-machine state), so rebuilding it is
-    its own piece of work rather than a line in a cutover. The cost of its absence is bounded:
-    two machines sweeping one repo produce a flagged row and a rebase, not lost work.
+    🔴 **NOT REBUILT, by the owner's decision of 2026-11-11, and the exposure is measured
+    rather than asserted** (ticket `LODESTAR_REPLACE_SWEEP_SOFT_LOCK_LOOP_WAS_THE_LOCK`, closed
+    won't-fix). A cross-machine claim cannot live in a synced repo (nothing under `airlock/` may
+    hold per-machine state), and the only synced per-machine liveness signal, `lib/heartbeat.py`,
+    is capped at once an hour on purpose — so a replacement is a new claim protocol, not a line
+    in a cutover.
+
+    What the absence actually costs, measured over the last 1200 sweep commits: of 1793 distinct
+    sweep-committed paths, **10 were ever written by more than one machine**, 8 of those are
+    per-machine snapshot files that cannot collide by construction, 1 is a file that no longer
+    exists, and the remainder is `sync/remotes.md` — which has its own resolver
+    (`resolve_remotes_rebase`, preferring SSH) and reports CONTENDED, not FLAGGED. A collision
+    additionally requires two machines to see the same path quiet for `quiescence_minutes`
+    within one window. Zero "conflict on rebase" events appear in the journal or sync reports.
+    Worst case is one flagged row until the next sweep (~1 h at `StartInterval` 3607 s), never
+    lost data.
 
     The function is kept as a stub rather than deleted so the one caller keeps its shape and
     the removal stays visible to a reader of the send phase.

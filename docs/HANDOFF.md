@@ -18,8 +18,8 @@ project (2026-09-17, session-linked in the decision log, D25):
 | Finding | Number | Design consequence |
 |---|---|---|
 | Pointers ("here's what's half-done") consumed by the successor | **25%** (19 of 76) | A read-side step now exists: `--wake` |
-| Pickup when the pointer carried a concrete imperative `NEXT:` action | **near-100%** | `--check` refuses a pointer without `NEXT:` |
-| Pickup for prose warnings without one | **~0%** | same |
+| Pickup when the pointer carried a concrete imperative `NEXT:` action | **every observed case**, but n≈4 and no counted comparison bucket — read it as a pattern, not a rate | `--check` refuses a pointer without `NEXT:` |
+| Pickup for prose warnings without one | **~0%**, same small-n caveat | same |
 | Recent handoffs shipping an *unattributed* dirty-tree dump | **7 of 11** | every dirty line gets a `<<< WHOSE? >>>` marker `--check` can see |
 | Mechanical bulk (git log / status dumps) per handoff | **~52%**, one file 844 lines | commits capped at 20 + a `git log` range pointer |
 | Lesson-claims stranded in handoffs that no durable doc ever received | **43 of 171** | `--harvest` extracts them all in one command |

@@ -429,11 +429,56 @@ def _releases(publish: str, repo: str) -> List[Dict]:
 
 # ---- verify -----------------------------------------------------------------------------------
 
+def _tip_is_stale_manifest(publish: str, repo: str, man, head: str, report: Dict) -> Optional[Dict]:
+    """The tip is unchanged since its own release and only TODAY'S manifest disagrees with it.
+
+    Owner ruling 2026-11-11 ("make it say why, not fail"): the tip check keeps its strictness —
+    this never flips `passed` — but `FAIL` is the wrong WORD for "the public tip predates the
+    current manifest". The measured hazard it answers: a release blocked on a human for an
+    unrelated reason leaves verify red indefinitely, and an instrument expected to be red is how
+    a real hit gets waved through. Naming the state keeps a real FAIL visually distinct.
+
+    Returns the evidence dict, or None. All three must hold, so a real leak can never land here:
+
+    1. `head` is a recorded, pushed release of this repo;
+    2. that release's own scan report PASSED and covers the SAME tree hash the tip scans to —
+       so the bytes are the ones a clean gate already cleared, not merely a similar tree;
+    3. the manifest has moved since (`sha256` differs), which is the only remaining explanation
+       for today's disagreement.
+    """
+    rec = next((r for r in _releases(publish, repo)
+                if r.get("pushed") and r.get("public_commit") == head), None)
+    if not rec or rec.get("manifest_sha256") == man.sha256:
+        return None
+    path = rec.get("scan_report")
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            at_release = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not at_release.get("passed"):
+        return None
+    if not at_release.get("tree_hash") or at_release["tree_hash"] != report.get("tree_hash"):
+        return None
+    return {"released_at": rec.get("at"), "release_manifest_sha256": rec.get("manifest_sha256"),
+            "manifest_sha256_now": man.sha256, "scan_report_at_release": path,
+            "tree_hash": report.get("tree_hash"),
+            "blocking_now": len(report.get("hits") or []),
+            "lapsed_now": len(report.get("lapsed_allowances") or [])}
+
+
 def verify(repo: str, store: Optional[str] = None) -> Dict:
     """Clone the public remote fresh, check every commit's identity and message, scan HEAD's
     tree in full. Older public trees are already public and unchanged, and their allowances
     lapse against today's manifest, so a recorded release's older hits are notes
-    (`history_notes`), not a FAIL; an unrecorded older commit with a hit still fails (D33)."""
+    (`history_notes`), not a FAIL; an unrecorded older commit with a hit still fails (D33).
+
+    The tip itself is never softened (D33). When it does not pass, `tip_verdict` says WHY in one
+    word — `fail`, or `stale-manifest` when the tip is byte-identical to a release its own clean
+    scan cleared and only today's manifest has moved (owner ruling 2026-11-11). `passed` is
+    unchanged by that distinction, and so is the exit code."""
     publish = private_dir(store)
     man = manifest_mod.load(repo, publish)
     if not man.public_remote:
@@ -451,6 +496,15 @@ def verify(repo: str, store: Optional[str] = None) -> Dict:
                                released={r.get("public_commit") for r in _releases(publish, repo)
                                          if r.get("pushed") and r.get("public_commit")})
     report["public_head"] = head
+    if report.get("passed"):
+        report["tip_verdict"] = "clean"
+    else:
+        # `commit` is set only when an OLDER tree failed; then the tip is not what is wrong.
+        stale = (None if report.get("commit") not in (None, head)
+                 else _tip_is_stale_manifest(publish, repo, man, head, report))
+        report["tip_verdict"] = "stale-manifest" if stale else "fail"
+        if stale:
+            report["tip_stale_manifest"] = stale
     report["path"] = scan_mod.write_report(publish, report, prefix="verify-")
     return report
 

@@ -35,6 +35,7 @@ from . import paths
 
 FILENAME = "untracked-scope.json"
 MARKER = ".lodestar-untracked"
+_FILES: Dict[str, Any] = {}
 CACHE_NAME = "untracked.json"
 
 _CACHE: Dict[str, Any] = {}
@@ -88,6 +89,18 @@ def cache_path() -> str:
 
 
 def _marker_files() -> List[str]:
+    """Marker files under the dev root. Memoised per process (cleared by reset()): specs() is called
+    once per name/path/text test, and an uncached glob here cost ~14 ms x 1100 calls on a drvfs
+    ~/dev, 18 s for a plain `ticket show`. Keyed on the env inputs so a changed root re-scans."""
+    key = (dev_root(), cache_path())
+    if _FILES.get("key") == key:
+        return list(_FILES["files"])
+    files = _marker_files_scan()
+    _FILES.update(key=key, files=files)
+    return list(files)
+
+
+def _marker_files_scan() -> List[str]:
     found = set(glob.glob(os.path.join(dev_root(), "*", MARKER)))
     try:
         with open(cache_path(), encoding="utf-8") as fh:
@@ -168,6 +181,7 @@ def specs() -> List[Dict[str, Any]]:
 
 def reset() -> None:
     _CACHE.clear()
+    _FILES.clear()
 
 
 def active() -> bool:

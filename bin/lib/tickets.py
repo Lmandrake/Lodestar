@@ -450,6 +450,14 @@ def _git(repo: str, *args: str, timeout: int = 120, tries: int = 4) -> Tuple[int
     """git, retried with backoff on a transient network failure (GitHub resets bursts of ssh
     connections: measured 2026-10-21 filing 13 tickets in a row). Never retries a refusal."""
     import time
+    if tries < 1:
+        # Every name below is bound only by the loop body, so `tries <= 0` fell off the end into
+        # `return rc, out, err` with all three unbound — a NameError, not a refusal, in the
+        # function every ticket write goes through. Unreachable at the default of 4, and one
+        # caller-supplied 0 away from being reachable. Refuse by name instead (found by pyright,
+        # confirmed by calling it).
+        raise ValueError("tries must be at least 1 (got %r): a zero-attempt git call has no "
+                         "result to return" % tries)
     for i in range(tries):
         rc, out, err = gitutil.run(repo, *args, timeout=timeout)
         if rc == 0 or not any(m in err for m in _TRANSIENT) or i == tries - 1:

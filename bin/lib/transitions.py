@@ -125,10 +125,27 @@ def observe(old_path: str, new_path: str) -> str:
     `lexists`, not `exists`: a dangling symlink at the destination is very much *something
     in the way*, and `exists` follows the link and reports the destination as free. An
     occupied destination that looks empty is how a move lands on top of something.
+
+    🔴 **One path is never two claimants.** A plan that changes only the REMOTE records
+    `old_path == new_path` (`lifecycle.py`'s rehome-the-origin branch does exactly that, by
+    design — the checkout does not move). Measured 2026-11-11: that made `observe` see "present
+    at old" and "present at new" for the same directory and answer `BOTH`, so `recovery_action`
+    stopped unconditionally with "<project> is present at BOTH <path> and
+    <path>" — the same path printed twice, which is the tell. The plan had
+    in fact succeeded (origin was already the planned URL), but it re-stopped on every converge
+    from 2026-11-07 on, held the sweep's only flagged row, and made `bin/lifecycle.py converge`
+    exit 1 forever. `BOTH` means two DIRECTORIES claim one id; comparing the paths first is what
+    makes that true. Equal paths fall through to the `old_there` branch and read `NOT_STARTED`,
+    which for a remote-only rehome is the correct and safe answer: proceed and re-point origin,
+    an idempotent operation.
     """
     old_there = os.path.lexists(old_path)
     new_there = os.path.lexists(new_path)
-    if old_there and new_there:
+    same_path = (old_path == new_path
+                 or (old_there and new_there
+                     and os.path.realpath(old_path) == os.path.realpath(new_path)
+                     and not os.path.islink(old_path) and not os.path.islink(new_path)))
+    if old_there and new_there and not same_path:
         # A compatibility link left at the old path, resolving to the moved checkout itself, is
         # the move finished rather than a second claimant (one machine keeps a junction at
         # the old path for hardcoded paths). Only a LINK qualifies, and only one that lands
@@ -315,6 +332,19 @@ def recovery_action(t: Transition, observed: str, current_fingerprint: str) -> D
         raise ValueError("unknown observed state %r" % (observed,))
 
     if observed == BOTH:
+        if t.old_path == t.new_path:
+            # 🔴 A caller that hands BOTH for one path has not measured a conflict; `observe`
+            # cannot produce this (it compares the paths first, since 2026-11-11) so reaching
+            # here means a hand-written or stale `observed`. Say which it is rather than
+            # printing one directory twice and asserting two claimants, which is exactly how
+            # this read as a real conflict for four days.
+            return {"action": STOP,
+                    "reason": "refusing to interpret: %r was reported present at BOTH paths, but "
+                              "its recorded old and new path are the SAME directory (%s), so "
+                              "there is one checkout and no two-claimant conflict. A remote-only "
+                              "rehome records both paths identically by design. The `observed` "
+                              "value handed in here is wrong, not the world."
+                              % (t.repo_id, t.old_path)}
         return {"action": STOP,
                 "reason": "%s is present at BOTH %s and %s, so two directories claim the id "
                           "%r. That is a conflict to report, never to resolve by picking a "

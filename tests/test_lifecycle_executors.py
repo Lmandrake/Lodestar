@@ -453,6 +453,56 @@ class RehomeExecutorTest(ExecutorTestCase):
                          "a dry run must not create the transitions store")
         self.assertEqual(_endpoints(repo)[0], PUBLIC, "a dry run must not touch config")
 
+    def test_the_same_repo_by_another_scheme_is_already_converged(self):
+        """Measured 2026-11-11 on `pillar`: the registry declares the https spelling and every
+        Mac reaches that host over ssh. Writing the declared string would force this machine
+        onto a scheme it cannot use, and the PARTIAL check's `!=` would then call the URL it
+        had just written stale. Identity decides, as it already does in the rename branch."""
+        repo = self.repo()
+        ssh_form = "git@github.example.com:example/repo.git"
+        https_form = "https://github.example.com/example/repo.git"
+        git(repo, "remote", "set-url", "origin", ssh_form)
+
+        state, lines = lifecycle._do_rehome(
+            plan("rehome", new=https_form), repo, "fp", False, [])
+
+        self.assertEqual(state, "converged")
+        self.assertEqual(_endpoints(repo)[0], ssh_form,
+                         "a correct remote in another scheme must be left exactly as found")
+        self.assertIn("already IS", "\n".join(lines))
+        self.assertFalse(os.path.exists(self.transitions_file),
+                         "nothing was mutated, so no transition should be invented")
+
+    def test_an_already_correct_remote_CLOSES_a_stranded_open_transition(self):
+        """The measured `pillar` state: an open row from an earlier attempt. Leaving it open is
+        what made every later converge re-stop and hold a flagged sweep row for four days."""
+        repo = self.repo()
+        ssh_form = "git@github.example.com:example/repo.git"
+        https_form = "https://github.example.com/example/repo.git"
+        git(repo, "remote", "set-url", "origin", ssh_form)
+        transitions.record(transitions.Transition(
+            plan_id=plan("rehome").plan_id, repo_id="throwaway", kind="rehome",
+            old_path=repo, new_path=repo, holding_path="", fingerprint="fp",
+            started_at="2026-11-07T10:50:46-08:00"), self.transitions_file)
+
+        state, _ = lifecycle._do_rehome(
+            plan("rehome", new=https_form), repo, "fp", False, [])
+
+        self.assertEqual(state, "converged")
+        rows = transitions.load(self.transitions_file)
+        self.assertTrue(rows[plan("rehome").plan_id].finished_at,
+                        "already-correct is converged, so a stranded row must be closed")
+
+    def test_a_genuinely_different_remote_is_STILL_repointed(self):
+        """The guard must still ACT: identity comparison must not swallow a real rehome."""
+        repo = self.repo()
+
+        state, _ = lifecycle._do_rehome(
+            plan("rehome", new=INTERNAL), repo, "fp", False, [])
+
+        self.assertEqual(state, "converged")
+        self.assertEqual(_endpoints(repo)[0], INTERNAL)
+
 
 class QuarantineExecutorTest(ExecutorTestCase):
 

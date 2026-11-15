@@ -124,8 +124,20 @@ def cmd_verify(args) -> int:
     for repo in repos:
         rep = release_mod.verify(repo)
         bad += not rep["passed"]
+        # The tip's strictness is D33 and is not weakened: STALE MANIFEST still counts as `bad`
+        # and still exits 1. Only the WORD changes, so a red instrument says which red it is
+        # (owner ruling 2026-11-11, "make it say why, not fail").
+        stale = rep.get("tip_verdict") == "stale-manifest"
+        verdict = "PASS" if rep["passed"] else ("STALE MANIFEST" if stale else "FAIL")
         print("%s %s: %s, %d hit(s), report %s" % (repo, rep["public_head"][:12],
-              "PASS" if rep["passed"] else "FAIL", len(rep["hits"]), rep["path"]))
+              verdict, len(rep["hits"]), rep["path"]))
+        if stale:
+            ev = rep["tip_stale_manifest"]
+            print("  the public tip predates the current manifest: this exact tree PASSED its own"
+                  " release scan%s, and the manifest has moved since. Nothing new is exposed —"
+                  " release to clear it." % (" (%s)" % ev["released_at"] if ev.get("released_at")
+                                             else ""))
+            print("  clean scan of this tree at release: %s" % ev["scan_report_at_release"])
         for note in rep.get("history_notes", []):
             print("  note: older public commit %s has %d hit(s) (a recorded release, already public; not a FAIL)"
                   % (note["commit"][:12], len(note["hits"])))

@@ -656,6 +656,75 @@ class VerifyHistory(PublishBase):
         self.assertTrue(tip["passed"], tip["hits"])
 
 
+class VerifyTipVerdict(PublishBase):
+    """Owner ruling 2026-11-11, "make it say why, not fail": a tip that is byte-identical to a
+    release its own clean scan cleared, failing only because today's manifest moved, is named
+    `stale-manifest`. It still does not pass — D33's tip check is not weakened."""
+
+    def _released_then_manifest_moves(self):
+        """Release a clean tree, then let the manifest disagree with that same tree."""
+        self.write("docs/a.md", CANARIES["email"] + "\n")
+        self.commit_push()
+        build_mod.build("Demo")
+        sha = common.sha256_file(os.path.join(common.tree_dir("Demo"), "docs/a.md"))
+        self.manifest(remote=self.public, extra=(
+            '\n[[allow]]\npath = "docs/a.md"\nsha256 = "%s"\nclass = "email"\n'
+            'reason = "synthetic fixture"\n' % sha))
+        report, _ = self.full_release()
+        self.assertTrue(report["passed"], report["hits"])
+        # The manifest moves on (the allowance is re-pinned to content that is not public yet),
+        # so today's manifest no longer describes the released tip.
+        self.manifest(remote=self.public, extra=(
+            '\n[[allow]]\npath = "docs/a.md"\nsha256 = "%s"\nclass = "email"\n'
+            'reason = "re-pinned to a tree not yet released"\n' % ("b" * 64)))
+
+    def test_clean_tip_says_clean(self):
+        self.full_release()
+        rep = release_mod.verify("Demo")
+        self.assertTrue(rep["passed"])
+        self.assertEqual(rep["tip_verdict"], "clean")
+        self.assertNotIn("tip_stale_manifest", rep)
+
+    def test_tip_unchanged_since_its_clean_release_is_named_stale_manifest(self):
+        self._released_then_manifest_moves()
+        rep = release_mod.verify("Demo")
+        self.assertFalse(rep["passed"])              # D33: still not a pass
+        self.assertEqual(rep["tip_verdict"], "stale-manifest")
+        ev = rep["tip_stale_manifest"]
+        self.assertTrue(os.path.isfile(ev["scan_report_at_release"]))
+        self.assertNotEqual(ev["release_manifest_sha256"], ev["manifest_sha256_now"])
+        with open(rep["path"]) as fh:
+            self.assertEqual(json.load(fh)["tip_verdict"], "stale-manifest")
+
+    def test_a_real_leak_in_the_tip_is_still_fail(self):
+        """The guard must REJECT: a tip whose bytes were never cleared is `fail`, not stale."""
+        self.full_release()
+        stage = common.staging_dir("Demo")
+        with open(os.path.join(stage, "leak.md"), "w") as fh:
+            fh.write(CANARIES["marker"] + "\n")
+        env = release_mod._clean_env()
+        git(stage, "add", "leak.md", env=env)
+        git(stage, "commit", "-q", "-m", "sneak", env=env)
+        git(stage, "push", "-q", "--no-verify", "origin", "HEAD:refs/heads/main", env=env)
+        rep = release_mod.verify("Demo")
+        self.assertFalse(rep["passed"])
+        self.assertEqual(rep["tip_verdict"], "fail")
+        self.assertNotIn("tip_stale_manifest", rep)
+
+    def test_unreleased_tip_with_moved_manifest_is_still_fail(self):
+        """A tip that is not a recorded release cannot be stale-manifest, however old."""
+        self._released_then_manifest_moves()
+        stage = common.staging_dir("Demo")
+        env = release_mod._clean_env()
+        with open(os.path.join(stage, "docs/a.md"), "a") as fh:
+            fh.write("hand-edited after the release\n")
+        git(stage, "commit", "-qam", "unreleased change", env=env)
+        git(stage, "push", "-q", "--no-verify", "origin", "HEAD:refs/heads/main", env=env)
+        rep = release_mod.verify("Demo")
+        self.assertFalse(rep["passed"])
+        self.assertEqual(rep["tip_verdict"], "fail")
+
+
 class Refusals(PublishBase):
     def test_dirty_source_refused(self):
         self.write("README.md", "# changed\n")

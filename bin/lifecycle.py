@@ -1031,8 +1031,27 @@ def _do_rehome(plan, repo_path, fingerprint, dry_run, lines):
                      "origin here to repoint" % repo_path)
         return ("would-converge" if dry_run else "converged"), lines
 
+    # 🔴 ALREADY-CORRECT IS CONVERGED, AND IDENTITY — NOT THE STRING — DECIDES THAT.
+    # Measured 2026-11-11: the plan's `new` is the registry's declared
+    # `https://<host>/...`, every Mac reaches that host over ssh
+    # (`git@<host>:...`), and both spellings are the same repository. Writing the
+    # https form would have forced this machine onto a scheme it does not use, and the `stale`
+    # check below compares with `!=`, so the very URL just written could then read as stale.
+    # `_rehome_declaration_step` and the rename branch above already compare by
+    # `skillclone.same_remote` for exactly this reason; this branch did not, which is the gap.
+    from lib import skillclone
+
+    fetch_url, push_urls = gitutil.remote_endpoints(repo_path)
+    if (fetch_url and skillclone.same_remote(fetch_url, plan.new)
+            and all(skillclone.same_remote(url, plan.new) for url in push_urls)):
+        lines.append("origin already IS %s (reached here as fetch=%s push=%s) — same repository,"
+                     " different access scheme; left exactly as found"
+                     % (plan.new, fetch_url, ", ".join(push_urls) or "(none)"))
+        if not dry_run:
+            transitions.finish(plan.plan_id)
+        return ("would-converge" if dry_run else "converged"), lines
+
     if dry_run:
-        fetch_url, push_urls = gitutil.remote_endpoints(repo_path)
         lines.append("would set origin to %s (currently fetch=%s push=%s)"
                      % (plan.new, fetch_url, ", ".join(push_urls) or "(none)"))
         return "would-converge", lines
@@ -1055,8 +1074,10 @@ def _do_rehome(plan, repo_path, fingerprint, dry_run, lines):
             % (result.code, result.err.strip() or "no stderr")]
 
     fetch_url, push_urls = gitutil.remote_endpoints(repo_path)
+    # By identity, like the early-exit above: a pushurl reaching the SAME repository by another
+    # scheme is not stale, and calling it stale would report PARTIAL on a correct repo.
     stale = [url for url in ([fetch_url] if fetch_url else []) + list(push_urls)
-             if url and url != plan.new]
+             if url and not skillclone.same_remote(url, plan.new)]
     lines.append("endpoints after: fetch=%s push=%s" % (fetch_url, ", ".join(push_urls)))
     if stale:
         return "partial", lines + [

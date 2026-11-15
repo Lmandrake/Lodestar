@@ -74,6 +74,35 @@ class TestObserve(TransitionTest):
         self.assertTrue(os.path.lexists(new))
         self.assertEqual(transitions.observe(old, new), transitions.BOTH)
 
+    def test_one_path_recorded_twice_is_not_two_claimants(self):
+        """A remote-only rehome records `old_path == new_path`: the checkout does not move.
+
+        Measured 2026-11-11: reading that as BOTH stopped `pillar`'s rehome on every converge
+        from 2026-11-07 on with "present at BOTH <path> and <the same path>", held the sweep's
+        only flagged row and pinned `lifecycle.py converge` to exit 1. BOTH means two
+        DIRECTORIES claim one id.
+        """
+        here = self.a_dir("Alpha")
+        self.assertEqual(transitions.observe(here, here), transitions.NOT_STARTED)
+
+    def test_two_real_directories_are_still_both(self):
+        """The guard must still REJECT the case it exists for, or it has eaten the check."""
+        self.assertEqual(
+            transitions.observe(self.a_dir("Gamma"), self.a_dir("Delta")), transitions.BOTH)
+
+    def test_one_directory_reached_by_two_spellings_is_not_two_claimants(self):
+        """`~/dev/X` and `~/dev/./X` are one checkout; only `realpath` sees that."""
+        here = self.a_dir("Epsilon")
+        spelled = os.path.join(os.path.dirname(here), ".", os.path.basename(here))
+        self.assertEqual(transitions.observe(here, spelled), transitions.NOT_STARTED)
+
+    def test_a_symlink_at_the_old_path_still_reads_as_moved(self):
+        """The compatibility-link case keeps its own answer, not the equal-paths one."""
+        new = self.a_dir("Zeta")
+        old = os.path.join(self.tmp, "Zeta-old")
+        os.symlink(new, old)
+        self.assertEqual(transitions.observe(old, new), transitions.MOVED)
+
 
 class TestStore(TransitionTest):
     def test_missing_file_loads_as_empty(self):
@@ -217,6 +246,21 @@ class TestBothStopsUnconditionally(TransitionTest):
         verdict = transitions.recovery_action(a_transition(), transitions.BOTH, "abc123")
         self.assertIn("/tmp/nope/Alpha", verdict["reason"])
         self.assertIn("/tmp/nope/Beta", verdict["reason"])
+
+    def test_one_path_reported_as_BOTH_says_the_report_is_wrong_not_the_world(self):
+        """The measured failure, second half: the STOP text interpolated both paths without
+        noticing they were equal, so the report asserted `pillar is present at BOTH <path> and
+        <the same path>` — something a reader can see is false, and which read as a real
+        two-claimant conflict for four days. `observe` can no longer produce this, so reaching
+        it means a stale or hand-written `observed`, and the message must say that."""
+        one = "/tmp/nope/Alpha"
+        verdict = transitions.recovery_action(
+            a_transition(old_path=one, new_path=one), transitions.BOTH, "abc123")
+        self.assertEqual(verdict["action"], transitions.STOP)
+        self.assertIn("SAME directory", verdict["reason"])
+        self.assertNotIn("two directories claim", verdict["reason"])
+        self.assertEqual(verdict["reason"].count(one), 1,
+                         "named the one directory more than once, which is the original defect")
 
 
 class TestSupersededPlanDominates(TransitionTest):
