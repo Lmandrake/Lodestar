@@ -19,7 +19,7 @@ Three constraints shape every decision here, and none of them is negotiable:
    opt-out). A repo nobody opted in to is never fetched, even if a skill row names it.
 
 **Why remote URLs are recorded rather than derived.** Most repos are
-`git@github.com:Lmandrake/<Name>.git`, and an earlier draft of this module claimed *all* of
+`git@github.com:<owner>/<Name>.git`, and an earlier draft of this module claimed *all* of
 them were. That was false, and not hypothetically: one repo's origin is on
 the private git host (`https://<private host>/<owner>/<Repo>.git`), which no pattern over `github.com`
 produces. A guessed URL that is wrong yields a repo that fails to clone on every sweep
@@ -65,7 +65,19 @@ CLONE_TIMEOUT_SECONDS = 900
 # across machines anyway.
 MAX_CLONES_PER_SWEEP = 1
 
-FALLBACK_TEMPLATE = "git@github.com:Lmandrake/%s.git"
+def fallback_template() -> str:
+    """The clone URL shape for a repo with no recorded remote, from `github.ssh_template` in
+    `sync/deployment.json` -- a second person's repos live under HIS owner name.
+
+    🔴 A FUNCTION, NOT AN IMPORT-TIME CONSTANT. It was a module constant computed at import
+    until 2026-11-17, which made "no deployment config" a traceback out of `bin/sync.py`'s
+    import line for any command that imports this module -- and this module is reached through
+    `lib/mirrors.py`, so that was nearly all of them. The sweep must be able to SAY what is
+    missing, which it cannot do if it dies while importing. `url_for` is the one caller, and it
+    only needs this when a repo has no recorded remote at all.
+    """
+    from . import deployment
+    return deployment.github("ssh_template")
 
 REMOTES_HEADER = """# Repo remotes — recorded, not guessed
 
@@ -130,8 +142,8 @@ def observe_remote(repo_path: str) -> Optional[str]:
 def normalize_remote(url: str) -> str:
     """A remote URL reduced to `host/owner/repo`, lowercased, for identity comparison.
 
-    `git@github.com:Lmandrake/X.git`, `ssh://git@github.com/Lmandrake/X`, and
-    `https://github.com/lmandrake/x.git` are the same repo; one machine may reach GitHub over
+    `git@github.com:owner/X.git`, `ssh://git@github.com/owner/X`, and
+    `https://github.com/OWNER/x.git` are the same repo; one machine may reach GitHub over
     https while another uses ssh, and treating them as different would both churn
     `sync/remotes.md` every sweep and defeat adopt-before-clone.
     """
@@ -176,7 +188,16 @@ def remote_host(url: str) -> str:
 
 
 def dev_root() -> str:
-    return os.path.expanduser(os.environ.get("LODESTAR_DEV_ROOT", "~/dev"))
+    """Where this deployment keeps its managed projects: `dev_root` in `sync/deployment.json`.
+
+    `LODESTAR_DEV_ROOT` still wins (a test sandbox). There is no `~/dev` default: an absent
+    config raises `deployment.ConfigError` by name, as every deployment value does.
+    """
+    override = os.environ.get("LODESTAR_DEV_ROOT")
+    if override:
+        return os.path.expanduser(override)
+    from . import deployment  # lazy: a missing config must be sayable, not an import crash
+    return deployment.dev_root()
 
 
 def checkouts(root: Optional[str] = None) -> List[Tuple[str, Optional[str]]]:
@@ -422,7 +443,7 @@ def url_for(name: str, mapping: Dict[str, str]) -> Tuple[str, str]:
     """Return (url, source) where source is 'recorded' or 'guessed'."""
     if name in mapping:
         return mapping[name], "recorded"
-    return FALLBACK_TEMPLATE % name, "guessed"
+    return fallback_template() % name, "guessed"
 
 
 def load_attempts(path: Optional[str] = None) -> Dict[str, float]:

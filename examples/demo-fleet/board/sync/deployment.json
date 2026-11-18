@@ -1,0 +1,40 @@
+{
+ "_comment": "The demo fleet's own deployment, invented for bin/demo_fleet.py --tour. Nothing here resolves to the machine running the demo.",
+ "owner_name": "Demo Owner",
+ "dev_root": "@HOMEDIR@/dev",
+ "checkout_root": "@HOMEDIR@/checkout",
+ "logs_dir": "@HOMEDIR@/logs",
+ "apps_dir": "@HOMEDIR@/Applications",
+ "interpreters": {
+  "pinned": "@HOMEDIR@/agent-storage/python/py",
+  "graph": "@HOMEDIR@/dev/GraphThing/.venv/bin/python",
+  "graph3": "@HOMEDIR@/dev/GraphThing/.venv/bin/python3",
+  "slack": "@HOMEDIR@/dev/SlackThing/.venv/bin/python",
+  "slack3": "@HOMEDIR@/dev/SlackThing/.venv/bin/python3",
+  "lodestar_venv": "@HOMEDIR@/dev/Lodestar/.venv/bin/python"
+ },
+ "sibling_repos": {
+  "mail": "@HOMEDIR@/dev/DemoMail",
+  "machinist": "@HOMEDIR@/dev/DemoMachinist",
+  "graphaccess": "@HOMEDIR@/dev/GraphThing",
+  "slackmaster": "@HOMEDIR@/dev/SlackThing",
+  "knowledge_graph": "@HOMEDIR@/dev/DemoGraph",
+  "workflows": "@HOMEDIR@/dev/DemoWorkflows",
+  "filing": "@HOMEDIR@/dev/DemoFiling",
+  "personalcomms": "@HOMEDIR@/dev/DemoComms"
+ },
+ "m365": {
+  "client_id": "DEMO-CLIENT-ID-NOT-A-GUID",
+  "tenant_id": "DEMO-TENANT-ID-NOT-A-GUID"
+ },
+ "github": {
+  "handle": "demoowner",
+  "noreply": "<id>+demoowner@users.noreply.github.com",
+  "board_repo": "demoowner/Lodestar",
+  "ssh_template": "git@github.com:demoowner/%s.git"
+ },
+ "slack": {
+  "team": "TDEMO0000",
+  "dm_user": "UDEMO0000"
+ }
+}

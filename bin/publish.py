@@ -24,6 +24,19 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# 🔴 The deployment config is read while importing `lib.publish.common` (the publish identity:
+# whose name and noreply address a release commit carries). That read MUST refuse when there is
+# no config -- publishing under a guessed identity is the one thing worse than not publishing --
+# but a person who just cloned this repo deserves a sentence, not a traceback. So the import is
+# guarded here rather than made lazy, because unlike the sweep this command genuinely cannot do
+# anything useful without it.
+try:
+    from lib import deployment as _deployment  # noqa: E402
+    _deployment.load()
+except Exception as _error:  # noqa: BLE001 - any config failure is the same refusal
+    print("REFUSED: %s" % _error, file=sys.stderr)
+    raise SystemExit(2)
+
 from lib.publish import build as build_mod  # noqa: E402
 from lib.publish import manifest as manifest_mod  # noqa: E402
 from lib.publish import release as release_mod  # noqa: E402

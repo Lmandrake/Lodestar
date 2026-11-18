@@ -51,6 +51,9 @@ from lib import (calroute, claudesettings, claudestatusline, clock, completions,
                  repopause, selfsync, skillclone, sweeplock, validate)
 import claudeconf  # noqa: E402
 
+#: The checkout this code runs from. The "am I the real checkout, not a fixture root" guards compare
+#: against it, so no checkout name or `~/dev` is written into code.
+REAL_CHECKOUT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_QUIESCENCE_MINUTES = 10
 SOFT_LOCK_MINUTES = 30
 
@@ -1130,7 +1133,7 @@ def clone_step(entries, dry_run: bool, where: Optional[str] = None) -> Optional[
             "second checkout." % (entry.name, path, matched))
 
     if not missing:
-        return Result("clones", os.path.expanduser("~/dev"), FLAGGED,
+        return Result("clones", skillclone.dev_root(), FLAGGED,
                       "%d row(s) mid-rename, nothing cloned" % len(mid_rename), mid_rename)
 
     name = "clones"
@@ -1139,7 +1142,7 @@ def clone_step(entries, dry_run: bool, where: Optional[str] = None) -> Optional[
         attempts = skillclone.clone_missing(missing, entries, mapping, dry_run=dry_run,
                                             where=where, machine_key=here)
     except Exception as error:  # cloning must never cost the sweep
-        return Result(name, os.path.expanduser("~/dev"), FLAGGED,
+        return Result(name, skillclone.dev_root(), FLAGGED,
                       "clone step failed: %s" % error, [])
 
     actions = mid_rename + ["%s: %s" % (attempt.name, attempt.detail) for attempt in attempts]
@@ -1153,7 +1156,7 @@ def clone_step(entries, dry_run: bool, where: Optional[str] = None) -> Optional[
         detail += ", %d held back mid-rename" % len(mid_rename)
     if not attempts and not mid_rename:
         return None
-    return Result(name, os.path.expanduser("~/dev"),
+    return Result(name, skillclone.dev_root(),
                   SYNCED if cloned else ABSENT, detail, actions)
 
 
@@ -1216,19 +1219,21 @@ def _mail_dir() -> str:
 
 
 def mail_reconcile_step(dry_run: bool) -> Optional[Result]:
-    """At most daily, on `mailreconcile.REPAIR_MACHINE` only: census the mail archive against
+    """At most daily, on the `mailrepair` machine only: census the mail archive against
     Graph and collect any gap. None when it is not this machine's turn.
 
     🔴 **BEFORE `sweep()`**, for `conversations_step`'s reason: repaired mail files are swept by
     this same pass. The census exists because a daily collector can lose days in silence —
     sentinels are run signals, never a census. It runs under the adapter's own interpreter
-    (`mailreconcile.GRAPH_PYTHON`); this process stays on plain `python3`.
+    (`mailreconcile.GRAPH_PYTHON`); this process stays on plain `python3`. An unclaimed
+    `mailrepair` duty is a legitimate deployment (nobody collects), so it returns None rather
+    than refusing; two claimants raises, because both would race the same archive.
     """
-    if dry_run or machine.key() != mailreconcile.REPAIR_MACHINE:
+    if dry_run or not mailreconcile.repairs_here():
         return None
     # Only from the real checkout: a sweep run against a fixture root (every sync test) must
     # never reach a real mailbox or write into the archive.
-    if os.path.realpath(paths.root()) != os.path.realpath(os.path.expanduser("~/dev/Lodestar")):
+    if os.path.realpath(paths.root()) != os.path.realpath(REAL_CHECKOUT):
         return None
     graph_python = str(getattr(mailreconcile, "GRAPH_PYTHON", "") or "")
     if not graph_python or not os.path.exists(graph_python):
@@ -1254,33 +1259,35 @@ def mail_reconcile_step(dry_run: bool) -> Optional[Result]:
 
 
 def sense_files_step(dry_run: bool) -> Optional[Result]:
-    """The GUI-free sensing route: refresh the calendar dump, then write both airlock captures.
+    """Refresh the calendar dump into `~/dev/Mail`, on a schedule.
 
     None when it is not this machine's turn, when the interval has not elapsed, or when there
     was nothing to report.
 
-    **What this closes.** Two legs of sensing were unscheduled, which is why calendar "worked
-    by hand and never on a timer" (2026-11-06):
+    **What this closes.** Calendar collection was unscheduled, which is why it "worked by hand
+    and never on a timer" (2026-11-06): Graph into `~/dev/Mail/cal--*.md`
+    (`bin/calendar_dump.py`). Mail's own equivalent is `mail_reconcile_step` above; calendar had
+    no scheduled caller anywhere, and the mail census cannot stand in for one
+    (`mailreconcile.disk_names_by_day` skips `cal` files by name, so it is mail-only by
+    construction).
 
-    * **Collect** — Graph into `~/dev/Mail/cal--*.md` (`bin/calendar_dump.py`). Mail's own
-      equivalent is `mail_reconcile_step` above; calendar had no scheduled caller anywhere,
-      and the mail census cannot stand in for one (`mailreconcile.disk_names_by_day` skips
-      `cal` files by name, so it is mail-only by construction).
-    * **Capture** — those files into `airlock/captures/<date>/` (`maildump.try_capture`).
-      Its only caller was `bin/sense.py`, whose LaunchAgents were deleted on 2026-11-06
-      because they drove Claude Desktop's UI and took the owner's screen. The capture writer
-      foregrounds nothing and was always the good half; it lost its trigger along with the
-      GUI half it happened to sit behind. **Both kinds were orphaned, not just calendar** —
-      so mail-triage is captured here too, or mail would be left half-wired.
+    🔴 **THIS STEP USED TO HAVE A SECOND LEG AND NO LONGER DOES.** Until 2026-11-16 it also
+    wrote `airlock/captures/<date>/` through `maildump.try_capture`. That leg is deleted with
+    the airlock, because its readers were all dead: the only consumers of
+    `paths.captures_dir()` were the validator that grades the captures, a scanner scheduled on
+    no machine, the retired shadow runner, and lib modules reachable only from the retired
+    review panel. The archive this step still writes is read live; the capture files were not.
+    **So the name is now wider than the behaviour** — it collects, it does not sense — and
+    renaming it is a later, separate change rather than part of a deletion commit.
 
-    🔴 **THE ORDER IS COLLECT-THEN-CAPTURE AND IT CANNOT BE REVERSED.**
-    `airlock.source_freshness` measures `captured - source_as_of`, where `source_as_of` is the
-    newest mtime among the files a capture actually read, against a 24 h threshold for
-    calendar. Capturing BEFORE the refresh — or scheduling the capture leg alone — writes a
-    fresh `captured` over a frozen `source_as_of` and reports STALE SOURCE for ever. That is
-    verbatim the incident `SOURCE_STALE_AFTER` exists to catch ("five days of `status:
-    sensed` calendar captures, gate PASSED every one, built from the same Sep-3 files"), so
-    the reversed order is not a slower fix, it is the original bug with extra steps.
+    The ordering constraint that used to dominate this docstring went with the capture leg:
+    `airlock.source_freshness` compared `captured` against the newest mtime of the files a
+    capture read, so capturing before refreshing wrote a fresh `captured` over a frozen source
+    and reported STALE SOURCE for ever (the `SOURCE_STALE_AFTER` incident: five days of
+    `status: sensed` calendar captures, gate PASSED every one, all built from the same Sep-3
+    files). With nothing capturing, there is no `captured` to go stale. 🔑 **The lesson
+    survives its mechanism**: a freshness check that reads its own write time rather than its
+    input's will certify a frozen source indefinitely.
 
     **Nothing here foregrounds an application** and nothing here needs a new LaunchAgent: it
     rides the sweep that is already scheduled, on the machine that already carries the mail
@@ -1289,14 +1296,13 @@ def sense_files_step(dry_run: bool) -> Optional[Result]:
     rejected on cadence: it ticks every 600 s, and a 561-event Graph pull at that rate is
     waste where `calroute.MIN_INTERVAL_HOURS` is ample.
 
-    A capture carries real meeting titles and senders, so it is gitignored here and mirrored
-    to the private store by `maildump` itself; this step reports COUNTS ONLY.
+    The dump carries real meeting titles and senders; this step reports COUNTS ONLY.
     """
-    if dry_run or machine.key() != calroute.CALENDAR_MACHINE:
+    if dry_run or not calroute.collects_here():
         return None
     # Only from the real checkout: a sweep run against a fixture root (every sync test) must
     # never reach a real mailbox or write into the archive. Same guard as the mail census.
-    if os.path.realpath(paths.root()) != os.path.realpath(os.path.expanduser("~/dev/Lodestar")):
+    if os.path.realpath(paths.root()) != os.path.realpath(REAL_CHECKOUT):
         return None
 
     report = paths.state_file(calroute.REPORT_NAME)
@@ -1341,24 +1347,19 @@ def sense_files_step(dry_run: bool) -> Optional[Result]:
                 # on an unreachable Graph; this line is the sweep-visible half of that.
                 problems.append("collect %s: exit %d" % (window, done.returncode))
 
-    # ---- leg 2: capture, from the files leg 1 just refreshed. Each kind independently: a
-    # calendar failure must not cost the mail capture, and `try_capture` returns None for
-    # "the dump cannot answer right now", which is a normal outcome and not a problem.
-    from lib import maildump
-    role = machine.role()
-    for kind in ("calendar", "mail-triage"):
-        try:
-            built = maildump.try_capture(kind, today, role)
-        except Exception as error:  # a capture must never sink the sweep
-            problems.append("capture %s: %s" % (kind, type(error).__name__))
-            continue
-        if built is None:
-            actions.append("capture %s: dump not usable this tick" % kind)
-        else:
-            actions.append("capture %s: %s (%s record(s))"
-                           % (kind, built.get("outcome", "?"),
-                              (built.get("evidence") or {}).get("actual_count", "?")))
-
+    # ---- leg 2 WAS "capture": write those files into `airlock/captures/<date>/` through
+    # `maildump.try_capture`. 🔴 DELETED 2026-11-16 (step 7 of the airlock retirement, owner
+    # ruling by question card). It is gone because it fed nobody. Measured 2026-11-11 and
+    # again before this cut: every reader of `paths.captures_dir()` was either the validator
+    # that grades the captures, `beacon_scan.py` (scheduled on no machine), the retiring
+    # shadow runner, or a lib module reachable only from `kanban.py`/`panel.py`, both retiring.
+    # So the writer ran hourly, the validator certified what the writer wrote, and nothing
+    # downstream ever read it — a pipeline certifying itself.
+    #
+    # 🔑 **COLLECT SURVIVES AND IS THE HALF THAT MATTERS.** Leg 1 above still refreshes
+    # `~/dev/Mail/cal--*.md` every interval, and that archive IS read live. Only the
+    # capture-file leg went. Do not "restore the missing half" on the strength of this
+    # docstring's history: the files-first sensing route it belonged to has no consumer.
     payload = {"ran_at": clock.now(), "windows": windows, "collected": collected,
                "problems": problems, "actions": actions}
     try:
@@ -1368,7 +1369,7 @@ def sense_files_step(dry_run: bool) -> Optional[Result]:
     except OSError as error:
         problems.append("report: %s" % error)
 
-    detail = "%d/%d window(s) collected, both captures attempted" % (collected, len(windows))
+    detail = "%d/%d window(s) collected" % (collected, len(windows))
     if problems:
         detail += "; %d problem(s)" % len(problems)
     return Result("sense-files", _mail_dir(), FLAGGED if problems else SYNCED, detail,
@@ -2179,7 +2180,7 @@ def _main(argv=None):
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true",
                        help="report what would happen; fetch only, never commit or push, "
-                            "and never record a fetch in ~/dev/.lodestar/fetch-state.json")
+                            "and never record a fetch in the fetch-state file under the dev root's .lodestar")
     parser.add_argument("--quiescence", type=int, default=DEFAULT_QUIESCENCE_MINUTES,
                        help="minutes a tree must be unchanged before auto-commit "
                             "(default: %d)" % DEFAULT_QUIESCENCE_MINUTES)
@@ -2187,7 +2188,7 @@ def _main(argv=None):
                        help="limit the sweep to this repo name; repeatable")
     parser.add_argument("--quiet", action="store_true", help="write files, print nothing")
     parser.add_argument("--discover", action="store_true",
-                       help="report checkouts under ~/dev that are not in the registry; "
+                       help="report checkouts under the dev root that are not in the registry; "
                             "changes nothing")
     parser.add_argument("--pause", nargs="+", metavar="[REPO] DURATION",
                        help="pause one repo (registry name or path; default cwd) for a "
@@ -2337,7 +2338,7 @@ def _sweep(args):
                 # An adoption rewrote a path in the registry; sweep the adopted checkout now.
                 entries = load_entries()
         except Exception as error:
-            results.append(Result("clones", os.path.expanduser("~/dev"), FLAGGED,
+            results.append(Result("clones", skillclone.dev_root(), FLAGGED,
                                   "unexpected error: %s" % error, []))
 
     # 🔴 BEFORE sweep(), deliberately: a conversation record is classified sweepable, so one
@@ -2386,7 +2387,7 @@ def _sweep(args):
     # another machine is gone here within one sweep. Deterministic, no model, never fatal; only
     # from the real checkout (a fixture-root test must not touch the live lists).
     if not args.dry_run and os.path.realpath(paths.root()) == os.path.realpath(
-            os.path.expanduser("~/dev/Lodestar")):
+            REAL_CHECKOUT):
         try:
             from lib import derived
             res = derived.refresh()

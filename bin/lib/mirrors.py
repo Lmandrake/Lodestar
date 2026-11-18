@@ -36,7 +36,7 @@ import tempfile
 import time
 from typing import Callable, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
-from . import boundary, machine, paths, proseguard, registry, skillclone
+from . import boundary, deployment, machine, paths, proseguard, registry, skillclone
 
 GITHUB = "github.com"
 
@@ -57,18 +57,34 @@ REPO_DEADLINE = 300.0    # seconds, per repo
 UNVERIFIED_AMBER = 24 * 3600
 EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 
-GITHUB_NAME = "Lukas Mandrake"
-NOREPLY_EMAIL = "313496996+lmandrake@users.noreply.github.com"
+def github_name() -> str:
+    """Whoever owns this deployment, as the author of a merge this module makes.
+
+    🔴 FUNCTIONS, NOT IMPORT-TIME CONSTANTS, and the reason is measured. `GITHUB_NAME` and
+    `NOREPLY_EMAIL` were module constants read at import until 2026-11-17. `bin/sync.py` imports
+    this module, so an unconfigured clone died with a TRACEBACK on `sync.py`'s import line
+    instead of the sentence `deployment` wrote for exactly this case. A sweep that cannot start
+    must still be able to SAY why. The refusal is unchanged where it belongs -- in the caller
+    that needs the value -- it simply no longer decides the fate of every command that imports
+    this file.
+    """
+    return deployment.owner_name()
+
+
+def noreply_email() -> str:
+    """This deployment's GitHub noreply address, lower-cased (it is compared lower-cased
+    throughout, so its stored case does not matter)."""
+    return deployment.github("noreply").lower()
 
 
 def github_email() -> str:
     """The merge commit's address on the github.com side: the configured public address, else
     the noreply identity."""
-    return boundary.public_email() or NOREPLY_EMAIL
+    return boundary.public_email() or noreply_email()
 
 
 def own_emails() -> frozenset:
-    return frozenset({github_email().lower(), NOREPLY_EMAIL}
+    return frozenset({github_email().lower(), noreply_email()}
                      | set(boundary.owner_addresses()))
 
 # States (D5).
@@ -402,8 +418,8 @@ def _merge_identity(entry: registry.Entry) -> Tuple[str, str]:
     except (OSError, subprocess.SubprocessError):
         email = ""
     if email.lower().endswith("@users.noreply.github.com"):
-        return GITHUB_NAME, email
-    return GITHUB_NAME, github_email()
+        return github_name(), email
+    return github_name(), github_email()
 
 
 def _merge(bare: str, entry: registry.Entry, o_tip: str, m_tip: str, branch: str,

@@ -14,14 +14,12 @@ when it flags a repo, so a flagged row is escalated to WARN here rather than rea
 |---|---|---|
 | launchagents | `launchctl list <label>` | — |
 | machine liveness | `heartbeat.facts()` | in-process, read-only |
-| `airlock.py` | Phase 2 linter | the real board (read-only) |
 | the sync sweep | the live agent's own result, else `sync.py --dry-run` | board snapshot |
 | claudeconf captures | `claudeconf.pending_captures()` | in-process, read-only |
 | claudeconf skills | `claudeconf.skills_state(dry_run=True)` | in-process, writes nothing |
-| `shadow.py --dry-run` | Phase 3 consumer, writes nothing | the real board |
-| `airlock.py --gate` | 🔒 Phase 2 gate | the real board |
-| `shadow.py --gate --days 1` | 🔒 Phase 4 go-live gate | the real board |
 | `run_tests.py` | the suite | opt-in only |
+
+The four airlock and shadow rows left this table on 2026-11-16 with the subsystem they graded.
 
 **Two rows call `claudeconf` in-process instead of shelling out, and that is still composing.**
 `pending_captures()` is a glob over a committed directory and `skills_state(dry_run=True)` is
@@ -32,16 +30,18 @@ same answer this file already gives for any evidence it could not obtain.
 
 **The suite is opt-in, and its absence is stated as loudly as a failure.** That is not
 convenience, it is the lesson of two separate defects found on 2026-09-01: Machinist's
-`tcc-audit.sh` omitted a permission and still reported clean, and `shadow.py --gate` prints
-"NOT CHECKED HERE — a gate that runs the suite can hang" for exactly this reason. A check
+`tcc-audit.sh` omitted a permission and still reported clean, and the retired `shadow.py --gate`
+printed "NOT CHECKED HERE — a gate that runs the suite can hang" for exactly this reason. A check
 that silently omits something is worse than no check, so a skipped row is named in the
 footer with "this is not a pass" spelled out.
 
 **Health and gates are different questions, and one exit code cannot carry both.** A tool
-erroring means something is *broken*. An unmet 🔒 gate means a *phase has not been reached* —
-today `shadow.py --gate --days 1` fails because the shadow day has not been run, which is
-not a fault. Collapsing the two would make `check.py` exit non-zero forever and nobody would
-run it. So:
+erroring means something is *broken*. An unmet 🔒 gate means a *phase has not been reached*,
+which is not a fault. (The example this paragraph used to give was `shadow.py --gate --days 1`
+failing because the shadow day had never been run — and it failed that way for weeks, right up
+to the subsystem's deletion, which is the distinction working as designed rather than against
+it.) Collapsing the two would make `check.py` exit non-zero forever and nobody would run it.
+So:
 
     0   everything checked passed
     1   a health check FAILED (something is broken) — or, with --strict, warned
@@ -183,7 +183,10 @@ SNAPSHOT_PATHS = ("machines.md", "BOARD.md", "PAUSE", "untracked-scope.json", "j
 # the documented state today (the shadow agent is "not yet installed" per SHADOW_AGENT.md).
 AGENTS = (
     ("com.lodestar.sync", True),
-    ("com.lodestar.shadow", False),
+    # com.lodestar.shadow is gone, not optional: unloaded and its plist retired 2026-11-16 with
+    # the airlock. An optional row for a job that can never come back reports "not loaded" for
+    # ever, which is the same noise as a required row would be. Removed in the same commit as
+    # the unload, with the bootcheck row.
     ("com.machinist.m365reconnect", False),
 )
 
@@ -1515,8 +1518,15 @@ def main(argv=None, run=None, launchctl=None, stream=None, report_file=None,
             # 🔑 What is NOT retired: the journal itself, and the two things that still prove it
             # readable -- `journal.load()` reports unreadable event files as `problems`, and the
             # prose-boundary rows below still guard every path under `journal/`.
-            tool_check("airlock.py", HEALTH, ["bin/airlock.py"], run, real_root,
-                       DEFAULT_TIMEOUT, ("error(s)", "airlock clean")),
+            # 🔴 FOUR ROWS LEFT THIS LIST ON 2026-11-16, and the reason is the whole point of
+            # the airlock retirement: `airlock.py`, `airlock.py --gate <date>`,
+            # `shadow.py --dry-run` and `shadow.py --gate --days 1` all graded a subsystem whose
+            # only consumer was the grader. Their last readings were a FAIL (52 errors, 195
+            # unreachable captures) and a permanently unmet Phase 4 gate — five weeks of a red
+            # row that no longer described anything a person could act on. The job is unloaded,
+            # the writer deleted, the code gone; a check for them would report a missing tool
+            # for ever. What replaced them is nothing, deliberately: there is no pipeline left
+            # to check.
             # Reads ~/dev/.lodestar/sync-status.json BEFORE any dry run of its own can
             # overwrite it, and asks launchctl whether the agent is mid-sweep right now.
             sync_check(run, snapshot, report_file=report_file, probe=probe, sleep=sleep,
@@ -1525,19 +1535,6 @@ def main(argv=None, run=None, launchctl=None, stream=None, report_file=None,
             # the sync row above cannot carry: read in-process, and writing nothing.
             pending_captures_check(captures),
             skills_check(skills),
-            tool_check("shadow.py --dry-run", HEALTH, ["bin/shadow.py", "--dry-run"],
-                       run, real_root, DEFAULT_TIMEOUT, ("would write", "DRY RUN")),
-            tool_check("airlock.py --gate %s" % date, GATE,
-                       ["bin/airlock.py", "--gate", date], run, real_root,
-                       DEFAULT_TIMEOUT, ("group(s):", "gate "),
-                       hint="this judges ONE day. Before that day's first sensing capture "
-                            "lands it fails legitimately — check the time before reading "
-                            "it as a regression."),
-            tool_check("shadow.py --gate --days 1", GATE,
-                       ["bin/shadow.py", "--gate", "--days", "1"], run, real_root,
-                       DEFAULT_TIMEOUT, ("criteria", "gate "),
-                       hint="the Phase 4 go-live gate; unmet until a shadow day has been "
-                            "run and its proposals reviewed (see docs/SHADOW_AGENT.md)"),
         ]
 
         if args.sandbox:

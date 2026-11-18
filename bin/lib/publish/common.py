@@ -16,9 +16,23 @@ except ImportError:  # pragma: no cover
     import paths  # type: ignore
 
 SOURCES_ENV = "PUBLISH_SOURCE_ROOT"
-DEFAULT_SOURCES = "~/dev"
-NOREPLY = "313496996+Lmandrake@users.noreply.github.com"
-PUBLIC_NAME = "Lukas Mandrake"
+
+
+def _dep():
+    try:
+        from lib import deployment  # type: ignore
+    except ImportError:  # pragma: no cover
+        from .. import deployment  # type: ignore
+    return deployment
+
+
+#: Whose publish identity this is, from `sync/deployment.json` -- never a literal, because a
+#: second person's published commits must carry HIS name and HIS noreply address (ticket
+#: LODESTAR_GENERALIZE_WHOLE_SYSTEM_FOR_ITS_SECOND_HUMAN). `deployscan` resolves the handle it
+#: hunts from `NOREPLY` below, so this is also the one place that definition lives.
+DEFAULT_SOURCES = _dep().dev_root_display()
+NOREPLY = _dep().github("noreply")
+PUBLIC_NAME = _dep().owner_name()
 _REPO_NAME = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]{0,99}\Z")
 
 

@@ -1358,14 +1358,38 @@ class MainTest(unittest.TestCase):
         self.assertNotIn("run_tests.py", not_checked)
 
     def test_a_failing_verification_exits_unhealthy_and_names_it(self):
-        code, text, _r = self.run_main(results={"airlock.py": (1, "boom\n")})
+        """Was `airlock.py`, deleted 2026-11-16 with the airlock; `run_tests.py` is the
+        surviving shell-out row and carries the identical property: a tool that exits non-zero
+        must make the run UNHEALTHY and must be NAMED in the output, because an exit code with
+        no name sends the reader to the wrong tool."""
+        code, text, _r = self.run_main(argv=["--tests"],
+                                       results={"run_tests.py": (1, "boom\n")})
         self.assertEqual(code, check_cmd.EXIT_UNHEALTHY, text)
-        self.assertIn("airlock.py", text)
+        self.assertIn("run_tests.py", text)
 
-    def test_an_unmet_gate_alone_exits_three(self):
-        code, text, _r = self.run_main(
-            results={"--gate --days 1": (1, "gate FAILED: 3 of 6 criteria unmet\n")})
-        self.assertEqual(code, check_cmd.EXIT_GATE_UNMET, text)
+    def test_no_gate_row_survives_the_airlock_but_the_tier_still_works(self):
+        """🔴 THIS TEST INVERTED ON 2026-11-16 and the inversion is worth reading.
+
+        It used to drive `--gate --days 1` to a failure and assert the run exited
+        `EXIT_GATE_UNMET`. Both gate rows were the airlock's (`airlock.py --gate <date>` and
+        `shadow.py --gate --days 1`) and went with it, so `check.py` now has NO gate-tier row
+        at all and that exit code is unreachable from `main`.
+
+        The tier machinery is deliberately kept, not deleted: "a phase not yet reached" and
+        "something is broken" are different answers and the next gate will need the
+        distinction. `TestSummarize` above still proves `summarize` returns `EXIT_GATE_UNMET`
+        for a failing GATE check, which is where that logic actually lives. This test now pins
+        the consequence instead -- no gate rows means a healthy run is plain OK, never a
+        phantom 3.
+        """
+        _code, _text, runner = self.run_main()
+        gate_calls = [argv for argv, _r, _t in runner.calls
+                      if any("--gate" in a for a in argv)]
+        self.assertEqual([], gate_calls, "a gate row came back; give it a tier and a test")
+        code, _text = check_cmd.summarize(
+            [check("g", tier=check_cmd.GATE, verdict=check_cmd.FAIL)])
+        self.assertEqual(check_cmd.EXIT_GATE_UNMET, code,
+                         "the GATE tier must keep working for the next gate that needs it")
 
     def test_a_hung_tool_is_a_timeout_not_a_hang(self):
         code, text, _r = self.run_main(results={"sync.py": (None, "")})
@@ -1380,13 +1404,17 @@ class MainTest(unittest.TestCase):
         for argv in sync_calls:
             self.assertIn("--dry-run", argv)
 
-    def test_never_a_live_shadow_run_either(self):
+    def test_the_retired_airlock_tools_are_never_invoked_again(self):
+        """Was `test_never_a_live_shadow_run_either`, which asserted every `shadow.py` call
+        carried `--dry-run` or `--gate`. The tools are deleted (2026-11-16), so the guard turns
+        around: invoking either one at all would now shell out to a missing file and report a
+        broken system on every run. Kept because a restored row is the plausible mistake -- the
+        docstring above still explains what those rows did."""
         _code, _text, runner = self.run_main()
-        shadow_calls = [argv for argv, _r, _t in runner.calls
-                        if any("shadow.py" in a for a in argv)]
-        self.assertTrue(shadow_calls)
-        for argv in shadow_calls:
-            self.assertTrue("--dry-run" in argv or "--gate" in argv, argv)
+        for argv, _r, _t in runner.calls:
+            joined = " ".join(argv)
+            self.assertNotIn("shadow.py", joined)
+            self.assertNotIn("airlock.py", joined)
 
     def test_root_mutating_tools_run_against_the_snapshot_not_the_board(self):
         _code, _text, runner = self.run_main()

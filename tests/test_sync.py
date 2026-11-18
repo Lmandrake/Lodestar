@@ -1308,9 +1308,9 @@ class TestSenseFilesStep(SweepTest):
         machine, a sweep whose board is a temp directory must not touch the live archive —
         the same guard `mail_reconcile_step` carries, for the same reason.
         """
-        saved = sync_cmd.calroute.CALENDAR_MACHINE
-        sync_cmd.calroute.CALENDAR_MACHINE = "test-box"
-        self.addCleanup(setattr, sync_cmd.calroute, "CALENDAR_MACHINE", saved)
+        saved = sync_cmd.calroute.collects_here
+        sync_cmd.calroute.collects_here = lambda *a, **k: True
+        self.addCleanup(setattr, sync_cmd.calroute, "collects_here", saved)
         # The machine gate now passes; only the fixture-root guard can stop it.
         self.assertNotEqual(os.path.realpath(paths.root()),
                             os.path.realpath(os.path.expanduser("~/dev/Lodestar")))
@@ -1331,14 +1331,23 @@ class TestSenseFilesStep(SweepTest):
                         "sense_files_step must run before sweep(), or the calendar files it "
                         "collects wait an hour for the next pass to commit them")
 
-    def test_the_capture_leg_covers_both_kinds(self):
-        """Both kinds were orphaned when `sense.py`'s LaunchAgents were deleted, not just
-        calendar — `maildump.try_capture` was the single writer for mail-triage too. Wiring
-        only calendar would leave mail permanently unsensed by the files-first path.
+    def test_the_capture_leg_is_gone_and_does_not_come_back(self):
+        """🔴 This test INVERTED on 2026-11-16, and the inversion is the point.
+
+        It used to assert the step captured BOTH kinds (`"calendar", "mail-triage"`), because
+        both were orphaned when `sense.py`'s LaunchAgents were deleted. The capture leg is now
+        deleted with the airlock: every reader of `paths.captures_dir()` was dead, so the
+        writer ran hourly and fed only the validator that graded it.
+
+        Kept rather than deleted because the restoration is the plausible mistake: the step's
+        own docstring still narrates a capture leg as history, and a future reader "fixing the
+        missing half" would re-create an hourly writer with no consumer. **Collect must
+        survive** — `~/dev/Mail` is read live — so this asserts the asymmetry, not an absence.
         """
         import inspect
         source = inspect.getsource(sync_cmd.sense_files_step)
-        self.assertIn('"calendar", "mail-triage"', source)
+        self.assertNotIn("maildump.try_capture(", source)
+        self.assertIn("calendar_dump.py", source)
 
 
 if __name__ == "__main__":

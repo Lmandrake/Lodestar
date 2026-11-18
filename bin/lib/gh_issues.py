@@ -77,10 +77,22 @@ def _local_projects(path: str = LOCAL_PROJECTS) -> Dict[str, Dict[str, object]]:
     return out
 
 
-def _board_repo(default: str = "Lmandrake/Lodestar") -> str:
+def _board_repo(default: Optional[str] = None) -> str:
     """owner/repo of this board's own GitHub repo, from the registry's declared `Remote` for id
     `lodestar`, so a rehome (e.g. to `Lodestar-dev`) carries the issues pilot with it instead of
-    leaving it aimed at a name another repository may now hold. No registry row: `default`."""
+    leaving it aimed at a name another repository may now hold. No registry row: `default`, which
+    itself falls back to this deployment's configured `github.board_repo` rather than a literal
+    owner/name in code -- a second person's board is his own repo (ticket
+    `LODESTAR_GENERALIZE_WHOLE_SYSTEM_FOR_ITS_SECOND_HUMAN`)."""
+    if default is None:
+        try:
+            from lib import deployment
+        except ImportError:  # pragma: no cover
+            from . import deployment  # type: ignore
+        try:
+            default = deployment.github("board_repo")
+        except Exception:  # an unconfigured board is a None answer, never a guessed repo
+            default = None
     try:
         from lib import registry
     except ImportError:  # pragma: no cover

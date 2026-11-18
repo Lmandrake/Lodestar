@@ -162,11 +162,16 @@ class ViolationsTest(GuardBase):
     def test_forbidden_paths(self):
         for rel in ("conversations/x.md", "handoffs/SOLO_HANDOFF_1.md", ".consult/transcript.md",
                     "airlock/captures/d/x.md", "airlock/review/zap-idmap.json",
+                    "airlock/review/mockups/build.py",
                     "claude/snapshot/mt-002/memory/p/MEMORY.md"):
             self.write(rel, "x\n")
             self.assertTrue(proseguard.violations(self.repo, [rel]), rel)
-        for rel in ("airlock/review/mockups/build.py",
-                    "claude/snapshot/tower/memory/p/MEMORY.md"):
+        # `airlock/review/mockups/build.py` was allowed here until 2026-11-17: the directory
+        # was mixed (code kept, derived data refused) and the guard carried a file-extension
+        # exemption for it. The owner ruled the directory deleted, the code having moved to
+        # `bin/lib/tree/` on 2026-11-16, so the whole prefix is now plainly forbidden -- which
+        # the first loop above asserts. The rule outlives the directory.
+        for rel in ("claude/snapshot/tower/memory/p/MEMORY.md",):
             self.write(rel, "x\n")
             self.assertEqual(proseguard.violations(self.repo, [rel]), [], rel)
 

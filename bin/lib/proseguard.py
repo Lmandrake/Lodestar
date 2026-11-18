@@ -54,6 +54,13 @@ FORBIDDEN = (
     ".consult/",
     "airlock/captures/", "airlock/offers/", "airlock/predrafts/", "airlock/done/",
     "airlock/executed/", "airlock/shadow/", "airlock/requests/",
+    # `airlock/review/` was a mixed directory until 2026-11-17 -- code kept, derived JSON/HTML
+    # refused -- and so needed its own rule with a file-extension exemption. The owner ruled the
+    # directory deleted (its one valuable part, the Tree snapshot, moved to the private store on
+    # 2026-11-16), so the exemption is gone and the prefix is now a plain forbidden one. 🔑 The
+    # RULE outlives its subject: derived review data must never reach this remote, so a path
+    # re-appearing under this name is still refused rather than silently allowed.
+    "airlock/review/",
     "airlock/DIGEST.md", "airlock/kairos-queue.jsonl", "airlock/kairos-receipts.json",
     "priority/hold-queue.md",
 )
@@ -61,9 +68,6 @@ FORBIDDEN = (
 #: Work machines' auto-memory snapshots carry work project memory; a home machine's does not.
 WORK_MEMORY_RE = re.compile(r"\Aclaude/snapshot/([^/]+)/memory/")
 
-#: airlock/review/ holds code (kept) and derived JSON/HTML built from mail (refused).
-REVIEW_PREFIX = "airlock/review/"
-REVIEW_CODE = (".py", ".js", ".mjs")
 
 OWN_ADDRESSES = tuple(boundary.owner_addresses())
 ADDRESS_LABEL = "private-domain address"
@@ -449,8 +453,6 @@ def forbidden(rel: str, work_keys: Optional[Sequence[str]] = None) -> Optional[s
     for prefix in FORBIDDEN:
         if rel == prefix or (prefix.endswith("/") and rel.startswith(prefix)):
             return "private-class path (%s)" % prefix
-    if rel.startswith(REVIEW_PREFIX) and not rel.endswith(REVIEW_CODE):
-        return "private-derived review data (%s)" % REVIEW_PREFIX
     m = WORK_MEMORY_RE.match(rel)
     if m:
         keys = _work_keys() if work_keys is None else work_keys

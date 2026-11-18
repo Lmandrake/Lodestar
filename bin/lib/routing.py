@@ -210,11 +210,38 @@ DEFAULT_BY_SOURCE = {s: STORE_ROW for s in ("mail", "slack", "teams", "calendar"
 NEVER_GITHUB = ("gmail",)
 DEFAULT_ROWS = ("Hestia", STORE_ROW)
 
-#: Destinations that only accept some source classes, by directory. Hestia's remote is
-#: github.com, so no private-class item may be written anywhere under it (docs/bearing/SKILL.md,
-#: "Boundary, enforced on every write"). The private store accepts both classes by his ruling.
-HESTIA_DIR = "~/dev/Hestia"
-BOUNDED_DIRS = ((HESTIA_DIR, ("personal",)),)
+#: The role this deployment's household-filing checkout plays in `sibling_repos`. The ROLE is
+#: the stable thing; the path is one deployment's own (owner's ruling 2026-11-17: keep the
+#: interaction and repoint the second person's filing checkout -- every behaviour below is
+#: unchanged, only the root is configured).
+FILING_ROLE = "filing"
+
+
+def filing_root() -> str:
+    """The household-filing checkout's root, from `sibling_repos["filing"]`.
+
+    🔴 LAZY, AND IT RAISES RATHER THAN GUESSING. Two separate rules meet here:
+
+    - **A library must raise so its caller can report; only a command may exit.** This module is
+      imported by almost everything, so a module-level `deployment.sibling_repo(...)` would let a
+      missing config veto commands that never touch this value -- the exact failure that took
+      `bin/sync.py` down from a constant in `lib/mirrors.py` (see `lib/mailreconcile._config`,
+      the precedent this follows).
+    - **No fallback.** An `expanduser("~/dev/Hestia")` default would silently file a second
+      person's household facts into a path that is not his, or refuse writes under the root that
+      IS. `deployment.sibling_repo` raises `ConfigError` naming `sibling_repos['filing']` and the
+      config file instead.
+    """
+    from . import deployment
+    return deployment.sibling_repo(FILING_ROLE)
+
+
+def bounded_dirs() -> Tuple[Tuple[str, Tuple[str, ...]], ...]:
+    """Destinations that only accept some source classes, by directory. The filing checkout's
+    remote is github.com, so no private-class item may be written anywhere under it
+    (docs/bearing/SKILL.md, "Boundary, enforced on every write"). The private store accepts both
+    classes by his ruling. A function, not a constant, for the reason `filing_root` gives."""
+    return ((filing_root(), ("personal",)),)
 
 
 class Resolution(NamedTuple):
@@ -242,7 +269,7 @@ def _under(path: str, root: str) -> bool:
 
 
 def allowed_classes(dir_path: str) -> Tuple[str, ...]:
-    for root, classes in BOUNDED_DIRS:
+    for root, classes in bounded_dirs():
         if _under(dir_path, root):
             return classes
     return (PRIVATE, "personal")
@@ -250,11 +277,11 @@ def allowed_classes(dir_path: str) -> Tuple[str, ...]:
 
 def accepts(dir_path: Optional[str], source: str, door: bool = False) -> bool:
     """May an item from `source` be written into `dir_path`? Used by EVERY writer. `door` is
-    Hestia's gitignored inbox (`bearingfile.hestia_drop`), the one Hestia path a NEVER_GITHUB
-    source may use."""
+    the filing checkout's gitignored inbox (`bearingfile.hestia_drop`), the one path under it a
+    NEVER_GITHUB source may use."""
     if not dir_path:
         return True
-    if source in NEVER_GITHUB and not door and _under(dir_path, HESTIA_DIR):
+    if source in NEVER_GITHUB and not door and _under(dir_path, filing_root()):
         return False
     return source_class(source) in allowed_classes(dir_path)
 
